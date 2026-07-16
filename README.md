@@ -61,6 +61,22 @@ ssh -L 17861:localhost:17861 \
 隧道建立后，本地浏览器打开 http://localhost:17861（Web UI）、
 http://localhost:18001/docs（API 文档）。
 
+## 本地免费服务（A100 服务器）
+
+不依赖任何付费云服务，LLM 和图像/视频生成全部本地跑：
+
+```bash
+bash scripts/setup_ollama.sh    # LLM：Ollama + qwen2.5:14b（约 9GB）
+bash scripts/setup_comfyui.sh   # ComfyUI + 模型（约 65GB，耗时较长）
+
+./scripts/server-comfyui.sh     # 启动 ComfyUI（127.0.0.1:8188）
+```
+
+Web UI 中配置：
+- 大语言模型：Base URL `http://127.0.0.1:11434/v1`，API Key 随意填，模型 `qwen2.5:14b`
+- 本地 ComfyUI：`http://127.0.0.1:8188`
+- TTS：默认 edge-tts（免费）
+
 ## 更新子模块到上游最新
 
 ```bash

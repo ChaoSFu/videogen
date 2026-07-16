@@ -41,9 +41,9 @@ if ! conda run -n "$ENV_NAME" playwright install chromium; then
 fi
 
 echo ""
-echo "✅ 环境配置完成。启动方式："
-echo "   conda activate ${ENV_NAME}"
-echo "   cd $ROOT/vendor/Pixelle-Video"
-echo "   streamlit run web/app.py --server.address 0.0.0.0   # Web UI  :8501"
-echo "   # 或"
-echo "   python api/app.py --host 0.0.0.0 --port 8000        # API 服务 :8000"
+echo "✅ 环境配置完成。启动方式（仅监听本机，经 SSH 隧道访问）："
+echo "   $ROOT/scripts/server-web.sh   # Web UI  127.0.0.1:7861"
+echo "   $ROOT/scripts/server-api.sh   # API 服务 127.0.0.1:8001"
+echo ""
+echo "   本地建立隧道: ssh -L 7861:localhost:7861 -L 8001:localhost:8001 chao@<服务器IP>"
+echo "   然后浏览器打开 http://localhost:7861"

@@ -1,4 +1,4 @@
-# videogen
+服务器部署# videogen
 
 视频生成模型的统一包装层。
 
@@ -41,13 +41,25 @@ git submodule update --init
 git clone --recurse-submodules git@github.com:ChaoSFu/videogen.git
 cd videogen
 bash scripts/setup_conda.sh
-
-conda activate videogen
-cd vendor/Pixelle-Video
-streamlit run web/app.py --server.address 0.0.0.0   # Web UI  :8501
-# 或
-python api/app.py --host 0.0.0.0 --port 8000        # API 服务 :8000
 ```
+
+服务只监听服务器本机（127.0.0.1），不对外开放端口：
+
+```bash
+./scripts/server-web.sh   # Web UI  127.0.0.1:7861
+./scripts/server-api.sh   # API 服务 127.0.0.1:8001
+```
+
+本地通过 SSH 隧道访问：
+
+```bash
+ssh -L 7861:localhost:7861 \
+    -L 8001:localhost:8001 \
+    chao@<服务器IP>
+```
+
+隧道建立后，本地浏览器打开 http://localhost:7861（Web UI）、
+http://localhost:8001/docs（API 文档）。
 
 ## 更新子模块到上游最新
 

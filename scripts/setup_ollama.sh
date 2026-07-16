@@ -17,23 +17,33 @@ OLLAMA_MODELS_DIR="${OLLAMA_MODELS_DIR:-$OLLAMA_HOME/models}"
 # 官方 install.sh 也是从 github.com 下载，国内直连超时/极慢，
 # 因此直接下二进制包，优先走 GitHub 加速镜像，全部失败才试直连
 install_ollama() {
-    local tgz="$OLLAMA_HOME/ollama.tgz"
-    local gh_url="github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz"
+    local pkg=""
     local ok=""
     mkdir -p "$OLLAMA_HOME/dist" 2>/dev/null || {
         sudo mkdir -p "$OLLAMA_HOME/dist" && sudo chown -R "$USER" "$OLLAMA_HOME"
     }
-    for prefix in "https://ghfast.top/https://" "https://gh-proxy.com/https://" "https://ghproxy.net/https://" "https://"; do
-        echo "⬇️  下载: ${prefix}${gh_url}"
-        if curl --http1.1 -fL --connect-timeout 15 --retry 2 -o "$tgz" "${prefix}${gh_url}"; then
-            ok=1; break
-        fi
-        echo "⚠️  该源失败，换下一个..."
+    # 新版发布包为 .tar.zst，旧版为 .tgz，两种都尝试
+    for asset in ollama-linux-amd64.tar.zst ollama-linux-amd64.tgz; do
+        local gh_url="github.com/ollama/ollama/releases/latest/download/$asset"
+        for prefix in "https://ghfast.top/https://" "https://gh-proxy.com/https://" "https://ghproxy.net/https://" "https://"; do
+            echo "⬇️  下载: ${prefix}${gh_url}"
+            pkg="$OLLAMA_HOME/$asset"
+            if curl --http1.1 -fL --connect-timeout 15 --retry 2 -o "$pkg" "${prefix}${gh_url}"; then
+                ok=1; break 2
+            fi
+            echo "⚠️  该源失败，换下一个..."
+        done
     done
     [ -n "$ok" ] || { echo "❌ 所有下载源均失败"; return 1; }
     # 程序解压到 /data，/usr/local/bin 只放软链接
-    tar -C "$OLLAMA_HOME/dist" -xzf "$tgz"
-    rm -f "$tgz"
+    case "$pkg" in
+        *.zst)
+            command -v zstd &>/dev/null || sudo apt-get install -y zstd
+            tar --zstd -C "$OLLAMA_HOME/dist" -xf "$pkg" ;;
+        *)
+            tar -C "$OLLAMA_HOME/dist" -xzf "$pkg" ;;
+    esac
+    rm -f "$pkg"
     sudo ln -sf "$OLLAMA_HOME/dist/bin/ollama" /usr/local/bin/ollama
     # 注册 systemd 服务（以当前用户运行）
     sudo tee /etc/systemd/system/ollama.service >/dev/null <<UNIT

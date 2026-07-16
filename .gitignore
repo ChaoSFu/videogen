@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# 虚拟环境
+.venv/
+venv/
+
+# 环境变量与本地配置（含密钥，勿提交）
+.env
+.env.*
+config.yaml
+config.local.yaml
+
+# 测试与工具缓存
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# 生成产物（视频/音频/图片等中间与输出文件）
+output/
+outputs/
+temp/
+tmp/
+*.mp4
+*.mov
+*.avi
+*.webm
+*.mp3
+*.wav
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.swp
+
+# Claude Code 本地配置
+.claude/
+
+# macOS
+.DS_Store
+
+# 日志
+logs/
+*.log

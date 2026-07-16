@@ -1,0 +1,3 @@
+[submodule "vendor/Pixelle-Video"]
+	path = vendor/Pixelle-Video
+	url = git@github.com:ATH-MaaS/Pixelle-Video.git

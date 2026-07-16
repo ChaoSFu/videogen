@@ -28,7 +28,7 @@ install_ollama() {
         for prefix in "https://ghfast.top/https://" "https://gh-proxy.com/https://" "https://ghproxy.net/https://" "https://"; do
             echo "⬇️  下载: ${prefix}${gh_url}"
             pkg="$OLLAMA_HOME/$asset"
-            if curl --http1.1 -fL --connect-timeout 15 --retry 2 -o "$pkg" "${prefix}${gh_url}"; then
+            if curl --http1.1 -fL -C - --connect-timeout 15 --retry 2 -o "$pkg" "${prefix}${gh_url}"; then
                 ok=1; break 2
             fi
             echo "⚠️  该源失败，换下一个..."

@@ -25,7 +25,7 @@ fi
 create_env() {
     echo "🐍 创建 conda 环境 ${ENV_NAME}（python 3.11 + ffmpeg）..."
     # --override-channels: 只用 conda-forge，绕开需要接受 ToS 的 Anaconda 官方渠道
-    conda create -n "$ENV_NAME" --override-channels -c conda-forge python=3.11 ffmpeg -y
+    conda create -n "$ENV_NAME" --override-channels -c conda-forge python=3.11 pip ffmpeg -y
 }
 
 env_python_ok() {
@@ -44,15 +44,22 @@ else
     create_env
 fi
 
-# 4. 安装 Pixelle-Video 及其全部 Python 依赖
-echo "📦 安装 Pixelle-Video 依赖（首次较慢）..."
-conda run -n "$ENV_NAME" pip install -e "$ROOT/vendor/Pixelle-Video"
+# 4. 确保环境内有 pip（conda-forge 的 python 不自带 pip；
+#    缺了会串到系统 pip，装错 Python 版本）
+if ! conda run -n "$ENV_NAME" python -m pip --version &>/dev/null; then
+    echo "🔧 环境内缺少 pip，安装中..."
+    conda install -n "$ENV_NAME" --override-channels -c conda-forge pip -y
+fi
 
-# 5. 安装 Playwright 浏览器（HTML 视频帧渲染需要）
+# 5. 安装 Pixelle-Video 及其全部 Python 依赖（用 python -m pip 确保装进环境内）
+echo "📦 安装 Pixelle-Video 依赖（首次较慢）..."
+conda run -n "$ENV_NAME" python -m pip install -e "$ROOT/vendor/Pixelle-Video"
+
+# 6. 安装 Playwright 浏览器（HTML 视频帧渲染需要）
 echo "🌐 安装 Playwright chromium..."
-if ! conda run -n "$ENV_NAME" playwright install chromium; then
+if ! conda run -n "$ENV_NAME" python -m playwright install chromium; then
     echo "⚠️  chromium 安装失败，可能缺系统库，可尝试（需要 sudo）："
-    echo "   conda run -n $ENV_NAME playwright install --with-deps chromium"
+    echo "   conda run -n $ENV_NAME python -m playwright install --with-deps chromium"
 fi
 
 echo ""

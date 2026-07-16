@@ -22,12 +22,26 @@ if [ ! -f "$ROOT/vendor/Pixelle-Video/pyproject.toml" ]; then
 fi
 
 # 3. 创建环境（python 3.11 + ffmpeg 一并装进环境，无需系统级安装）
-if conda env list | grep -qE "^${ENV_NAME}[[:space:]]"; then
-    echo "✅ conda 环境 ${ENV_NAME} 已存在，跳过创建"
-else
+create_env() {
     echo "🐍 创建 conda 环境 ${ENV_NAME}（python 3.11 + ffmpeg）..."
     # --override-channels: 只用 conda-forge，绕开需要接受 ToS 的 Anaconda 官方渠道
     conda create -n "$ENV_NAME" --override-channels -c conda-forge python=3.11 ffmpeg -y
+}
+
+env_python_ok() {
+    conda run -n "$ENV_NAME" python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null
+}
+
+if conda env list | grep -qE "^${ENV_NAME}[[:space:]]"; then
+    if env_python_ok; then
+        echo "✅ conda 环境 ${ENV_NAME} 已存在（Python >= 3.11），跳过创建"
+    else
+        echo "♻️  环境 ${ENV_NAME} 已存在但 Python 版本不满足 >=3.11，删除重建..."
+        conda remove -n "$ENV_NAME" --all -y
+        create_env
+    fi
+else
+    create_env
 fi
 
 # 4. 安装 Pixelle-Video 及其全部 Python 依赖

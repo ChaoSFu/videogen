@@ -13,6 +13,8 @@ export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
 # pip 下载缓存、Playwright 浏览器都放 /data，避免撑爆根盘
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/data/pip-cache}"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/data/pw-browsers}"
+# Playwright 浏览器走 npmmirror 国内镜像下载
+export PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/playwright}"
 
 # 1. 检查 conda
 if ! command -v conda &>/dev/null; then
@@ -64,7 +66,7 @@ conda run -n "$ENV_NAME" python -m pip install -e "$ROOT/vendor/Pixelle-Video"
 
 # 6. 安装 Playwright 浏览器（HTML 视频帧渲染需要）
 echo "🌐 安装 Playwright chromium..."
-if ! conda run -n "$ENV_NAME" python -m playwright install chromium; then
+if ! conda run --no-capture-output -n "$ENV_NAME" python -m playwright install chromium; then
     echo "⚠️  chromium 安装失败，可能缺系统库，可尝试（需要 sudo）："
     echo "   conda run -n $ENV_NAME python -m playwright install --with-deps chromium"
 fi

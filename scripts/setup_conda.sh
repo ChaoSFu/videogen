@@ -42,8 +42,8 @@ fi
 
 echo ""
 echo "✅ 环境配置完成。启动方式（仅监听本机，经 SSH 隧道访问）："
-echo "   $ROOT/scripts/server-web.sh   # Web UI  127.0.0.1:7861"
-echo "   $ROOT/scripts/server-api.sh   # API 服务 127.0.0.1:8001"
+echo "   $ROOT/scripts/server-web.sh   # Web UI  127.0.0.1:17861"
+echo "   $ROOT/scripts/server-api.sh   # API 服务 127.0.0.1:18001"
 echo ""
-echo "   本地建立隧道: ssh -L 7861:localhost:7861 -L 8001:localhost:8001 chao@<服务器IP>"
-echo "   然后浏览器打开 http://localhost:7861"
+echo "   本地建立隧道: ssh -L 17861:localhost:17861 -L 18001:localhost:18001 chao@<服务器IP>"
+echo "   然后浏览器打开 http://localhost:17861"

@@ -22,12 +22,19 @@ install_ollama() {
     mkdir -p "$OLLAMA_HOME/dist" 2>/dev/null || {
         sudo mkdir -p "$OLLAMA_HOME/dist" && sudo chown -R "$USER" "$OLLAMA_HOME"
     }
-    # 新版发布包为 .tar.zst，旧版为 .tgz，两种都尝试
+    # 解压/校验 zst 包需要 zstd
+    command -v zstd &>/dev/null || sudo apt-get install -y zstd
+    # 新版发布包为 .tar.zst，旧版为 .tgz，两种都尝试；
+    # 若发现已有完整安装包（如手动 scp 上传的），直接使用
     for asset in ollama-linux-amd64.tar.zst ollama-linux-amd64.tgz; do
+        pkg="$OLLAMA_HOME/$asset"
+        if [ -s "$pkg" ] && tar -tf "$pkg" >/dev/null 2>&1; then
+            echo "✅ 发现已有完整安装包，跳过下载: $pkg"
+            ok=1; break
+        fi
         local gh_url="github.com/ollama/ollama/releases/latest/download/$asset"
         for prefix in "https://ghfast.top/https://" "https://gh-proxy.com/https://" "https://ghproxy.net/https://" "https://"; do
             echo "⬇️  下载: ${prefix}${gh_url}"
-            pkg="$OLLAMA_HOME/$asset"
             if curl --http1.1 -fL -C - --connect-timeout 15 --retry 2 -o "$pkg" "${prefix}${gh_url}"; then
                 ok=1; break 2
             fi
@@ -37,11 +44,8 @@ install_ollama() {
     [ -n "$ok" ] || { echo "❌ 所有下载源均失败"; return 1; }
     # 程序解压到 /data，/usr/local/bin 只放软链接
     case "$pkg" in
-        *.zst)
-            command -v zstd &>/dev/null || sudo apt-get install -y zstd
-            tar --zstd -C "$OLLAMA_HOME/dist" -xf "$pkg" ;;
-        *)
-            tar -C "$OLLAMA_HOME/dist" -xzf "$pkg" ;;
+        *.zst) tar --zstd -C "$OLLAMA_HOME/dist" -xf "$pkg" ;;
+        *)     tar -C "$OLLAMA_HOME/dist" -xzf "$pkg" ;;
     esac
     rm -f "$pkg"
     sudo ln -sf "$OLLAMA_HOME/dist/bin/ollama" /usr/local/bin/ollama

@@ -1,10 +1,14 @@
 #!/bin/bash
-# 部署本地 LLM：Ollama + Qwen2.5（OpenAI 兼容接口，供 Pixelle-Video 文案生成用）
-# 用法: bash scripts/setup_ollama.sh          （默认拉 qwen2.5:14b，约 9GB）
-#       LLM_MODEL=qwen2.5:7b bash scripts/setup_ollama.sh
+# 部署本地 LLM：Ollama + Qwen（OpenAI 兼容接口，供 Pixelle-Video 文案生成用）
+#
+# 默认 qwen3:32b（4bit 约 20GB 显存）：单卡 A100 80G 上与 ComfyUI
+# 共存的效果/显存最优档。更大的 72B 档会和 Wan2.1 视频生成互相挤爆，不要用。
+#
+# 用法: bash scripts/setup_ollama.sh
+#       LLM_MODEL=qwen2.5:14b bash scripts/setup_ollama.sh   # 换小模型
 set -e
 
-LLM_MODEL="${LLM_MODEL:-qwen2.5:14b}"
+LLM_MODEL="${LLM_MODEL:-qwen3:32b}"
 
 # 1. 安装 Ollama（官方脚本，需要 sudo）
 if ! command -v ollama &>/dev/null; then

@@ -66,14 +66,14 @@ http://localhost:18001/docs（API 文档）。
 不依赖任何付费云服务，LLM 和图像/视频生成全部本地跑：
 
 ```bash
-bash scripts/setup_ollama.sh    # LLM：Ollama + qwen2.5:14b（约 9GB）
+bash scripts/setup_ollama.sh    # LLM：Ollama + qwen3:32b（约 20GB）
 bash scripts/setup_comfyui.sh   # ComfyUI + 模型（约 65GB，耗时较长）
 
 ./scripts/server-comfyui.sh     # 启动 ComfyUI（127.0.0.1:8188）
 ```
 
 Web UI 中配置：
-- 大语言模型：Base URL `http://127.0.0.1:11434/v1`，API Key 随意填，模型 `qwen2.5:14b`
+- 大语言模型：Base URL `http://127.0.0.1:11434/v1`，API Key 随意填，模型 `qwen3:32b`
 - 本地 ComfyUI：`http://127.0.0.1:8188`
 - TTS：默认 edge-tts（免费）
 

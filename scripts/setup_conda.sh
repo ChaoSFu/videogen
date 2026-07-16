@@ -26,7 +26,8 @@ if conda env list | grep -qE "^${ENV_NAME}[[:space:]]"; then
     echo "✅ conda 环境 ${ENV_NAME} 已存在，跳过创建"
 else
     echo "🐍 创建 conda 环境 ${ENV_NAME}（python 3.11 + ffmpeg）..."
-    conda create -n "$ENV_NAME" -c conda-forge python=3.11 ffmpeg -y
+    # --override-channels: 只用 conda-forge，绕开需要接受 ToS 的 Anaconda 官方渠道
+    conda create -n "$ENV_NAME" --override-channels -c conda-forge python=3.11 ffmpeg -y
 fi
 
 # 4. 安装 Pixelle-Video 及其全部 Python 依赖

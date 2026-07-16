@@ -7,6 +7,10 @@ set -e
 ENV_NAME="${ENV_NAME:-videogen}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# pip 源：默认清华全量镜像（服务器原有源缺包会导致 ResolutionImpossible），
+# 可用 PIP_INDEX_URL 环境变量覆盖
+export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+
 # 1. 检查 conda
 if ! command -v conda &>/dev/null; then
     echo "❌ 未找到 conda，请先安装 Miniconda："

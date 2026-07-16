@@ -66,6 +66,23 @@ if ! conda run -n "$ENV_NAME" python -m playwright install chromium; then
     echo "   conda run -n $ENV_NAME python -m playwright install --with-deps chromium"
 fi
 
+# 7. 生成产物目录放 /data（output/ 软链到 /data/pixelle-output）
+PIXELLE_OUTPUT_DIR="${PIXELLE_OUTPUT_DIR:-/data/pixelle-output}"
+OUT_LINK="$ROOT/vendor/Pixelle-Video/output"
+if [ -d "$(dirname "$PIXELLE_OUTPUT_DIR")" ]; then
+    mkdir -p "$PIXELLE_OUTPUT_DIR" 2>/dev/null || {
+        sudo mkdir -p "$PIXELLE_OUTPUT_DIR" && sudo chown "$USER" "$PIXELLE_OUTPUT_DIR"
+    }
+    if [ -d "$OUT_LINK" ] && [ ! -L "$OUT_LINK" ]; then
+        mv "$OUT_LINK"/* "$PIXELLE_OUTPUT_DIR"/ 2>/dev/null || true
+        rmdir "$OUT_LINK"
+    fi
+    if [ ! -e "$OUT_LINK" ]; then
+        ln -s "$PIXELLE_OUTPUT_DIR" "$OUT_LINK"
+        echo "📁 生成产物目录: $OUT_LINK -> $PIXELLE_OUTPUT_DIR"
+    fi
+fi
+
 echo ""
 echo "✅ 环境配置完成。启动方式（仅监听本机，经 SSH 隧道访问）："
 echo "   $ROOT/scripts/server-web.sh   # Web UI  127.0.0.1:17861"

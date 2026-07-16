@@ -5,7 +5,7 @@
 # 预留显存（GB），ComfyUI 缓存模型时不会占满整卡。
 # 默认 24GB 对应 qwen3:32b（~20GB）+ 上下文开销。
 set -e
-COMFY_DIR="${COMFY_DIR:-$HOME/ComfyUI}"
+COMFY_DIR="${COMFY_DIR:-/data/ComfyUI}"
 ENV_NAME="${COMFY_ENV_NAME:-comfyui}"
 RESERVE_VRAM_GB="${RESERVE_VRAM_GB:-24}"
 cd "$COMFY_DIR"

@@ -72,6 +72,10 @@ bash scripts/setup_comfyui.sh   # ComfyUI + 模型（约 65GB，耗时较长）
 ./scripts/server-comfyui.sh     # 启动 ComfyUI（127.0.0.1:8188）
 ```
 
+大文件统一放在 `/data` 下：ComfyUI 及模型在 `/data/ComfyUI`，HuggingFace
+缓存在 `/data/hf-cache`，Ollama 模型库在 `/data/ollama/models`，生成的
+视频产物在 `/data/pixelle-output`（`vendor/Pixelle-Video/output` 软链接过去）。
+
 Web UI 中配置：
 - 大语言模型：Base URL `http://127.0.0.1:11434/v1`，API Key 随意填，模型 `qwen3:32b`
 - 本地 ComfyUI：`http://127.0.0.1:8188`

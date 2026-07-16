@@ -9,6 +9,8 @@
 set -e
 
 LLM_MODEL="${LLM_MODEL:-qwen3:32b}"
+# 模型库放 /data（大文件统一放 /data）
+OLLAMA_MODELS_DIR="${OLLAMA_MODELS_DIR:-/data/ollama/models}"
 
 # 1. 安装 Ollama（官方脚本，需要 sudo）
 if ! command -v ollama &>/dev/null; then
@@ -16,10 +18,28 @@ if ! command -v ollama &>/dev/null; then
     curl -fsSL https://ollama.com/install.sh | sh
 fi
 
-# 2. 确保服务在运行（安装后通常已注册 systemd 服务）
+# 2. 把模型存储目录指到 /data
+sudo mkdir -p "$OLLAMA_MODELS_DIR"
+if systemctl list-unit-files 2>/dev/null | grep -q "^ollama.service"; then
+    # systemd 方式安装：通过 override 配置 OLLAMA_MODELS
+    if ! grep -qs "OLLAMA_MODELS=$OLLAMA_MODELS_DIR" /etc/systemd/system/ollama.service.d/override.conf 2>/dev/null; then
+        echo "🔧 配置 Ollama 模型目录为 $OLLAMA_MODELS_DIR ..."
+        sudo chown -R ollama:ollama "$(dirname "$OLLAMA_MODELS_DIR")" 2>/dev/null || true
+        sudo mkdir -p /etc/systemd/system/ollama.service.d
+        printf '[Service]\nEnvironment="OLLAMA_MODELS=%s"\n' "$OLLAMA_MODELS_DIR" | \
+            sudo tee /etc/systemd/system/ollama.service.d/override.conf >/dev/null
+        sudo systemctl daemon-reload
+        sudo systemctl restart ollama
+        sleep 3
+    fi
+else
+    export OLLAMA_MODELS="$OLLAMA_MODELS_DIR"
+fi
+
+# 3. 确保服务在运行
 if ! curl -s http://127.0.0.1:11434/api/tags >/dev/null; then
     echo "🚀 启动 Ollama 服务..."
-    nohup ollama serve >/tmp/ollama.log 2>&1 &
+    nohup env OLLAMA_MODELS="$OLLAMA_MODELS_DIR" ollama serve >/tmp/ollama.log 2>&1 &
     sleep 3
 fi
 

@@ -4,16 +4,18 @@
 #
 # 用法: bash scripts/setup_comfyui.sh
 # 可覆盖的环境变量:
-#   COMFY_DIR=/data/ComfyUI     ComfyUI 安装目录（默认 ~/ComfyUI）
+#   COMFY_DIR=...               ComfyUI 安装目录（默认 /data/ComfyUI，大文件统一放 /data）
 #   COMFY_ENV_NAME=comfyui      conda 环境名
 #   HF_ENDPOINT=...             HuggingFace 镜像（默认 hf-mirror.com）
 #   PIP_INDEX_URL=...           pip 源（默认清华镜像）
 set -e
 
-COMFY_DIR="${COMFY_DIR:-$HOME/ComfyUI}"
+COMFY_DIR="${COMFY_DIR:-/data/ComfyUI}"
 ENV_NAME="${COMFY_ENV_NAME:-comfyui}"
 export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+# HuggingFace 下载缓存也放 /data，避免撑爆家目录
+export HF_HOME="${HF_HOME:-/data/hf-cache}"
 
 if ! command -v conda &>/dev/null; then
     echo "❌ 未找到 conda"; exit 1

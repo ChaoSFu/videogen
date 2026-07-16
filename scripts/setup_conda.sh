@@ -10,8 +10,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # pip 源：默认清华全量镜像（服务器原有源缺包会导致 ResolutionImpossible），
 # 可用 PIP_INDEX_URL 环境变量覆盖
 export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
-# pip 下载缓存放 /data，避免撑爆根盘
+# pip 下载缓存、Playwright 浏览器都放 /data，避免撑爆根盘
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/data/pip-cache}"
+export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/data/pw-browsers}"
 
 # 1. 检查 conda
 if ! command -v conda &>/dev/null; then

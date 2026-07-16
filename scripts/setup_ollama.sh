@@ -47,11 +47,13 @@ UNIT
     sudo systemctl enable --now ollama
 }
 
-if ! command -v ollama &>/dev/null; then
+# 不仅检查命令存在，还要能真正执行（防止此前中断的安装留下残缺文件）
+if ! ollama --version &>/dev/null; then
     echo "📥 安装 Ollama（可能需要输入 sudo 密码）..."
+    sudo rm -rf /usr/local/bin/ollama /usr/local/lib/ollama   # 清理残缺安装
     install_ollama
 fi
-command -v ollama &>/dev/null || { echo "❌ Ollama 安装失败，请检查网络后重试"; exit 1; }
+ollama --version &>/dev/null || { echo "❌ Ollama 安装失败，请检查网络后重试"; exit 1; }
 
 # 2. 把模型存储目录指到 /data
 sudo mkdir -p "$OLLAMA_MODELS_DIR"

@@ -74,7 +74,8 @@ if [ -d "$(dirname "$PIXELLE_OUTPUT_DIR")" ]; then
         sudo mkdir -p "$PIXELLE_OUTPUT_DIR" && sudo chown "$USER" "$PIXELLE_OUTPUT_DIR"
     }
     if [ -d "$OUT_LINK" ] && [ ! -L "$OUT_LINK" ]; then
-        mv "$OUT_LINK"/* "$PIXELLE_OUTPUT_DIR"/ 2>/dev/null || true
+        # 搬迁全部内容（含隐藏文件）后移除原目录
+        find "$OUT_LINK" -mindepth 1 -maxdepth 1 -exec mv -t "$PIXELLE_OUTPUT_DIR" {} +
         rmdir "$OUT_LINK"
     fi
     if [ ! -e "$OUT_LINK" ]; then

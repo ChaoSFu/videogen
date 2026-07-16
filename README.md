@@ -33,6 +33,22 @@ git submodule update --init
 
 也可以用它自带的 Docker 方式：`cd vendor/Pixelle-Video && docker compose up`。
 
+## 服务器部署（conda）
+
+不依赖 uv，用 conda 管理环境（ffmpeg 随环境安装，无需 sudo）：
+
+```bash
+git clone --recurse-submodules git@github.com:ChaoSFu/videogen.git
+cd videogen
+bash scripts/setup_conda.sh
+
+conda activate videogen
+cd vendor/Pixelle-Video
+streamlit run web/app.py --server.address 0.0.0.0   # Web UI  :8501
+# 或
+python api/app.py --host 0.0.0.0 --port 8000        # API 服务 :8000
+```
+
 ## 更新子模块到上游最新
 
 ```bash

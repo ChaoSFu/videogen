@@ -73,7 +73,7 @@ bash scripts/setup_comfyui.sh   # ComfyUI + 模型（约 65GB，耗时较长）
 ```
 
 大文件统一放在 `/data` 下：ComfyUI 及模型在 `/data/ComfyUI`，HuggingFace
-缓存在 `/data/hf-cache`，Ollama 模型库在 `/data/ollama/models`，生成的
+缓存在 `/data/hf-cache`，Ollama 程序与模型库在 `/data/ollama`，生成的
 视频产物在 `/data/pixelle-output`（`vendor/Pixelle-Video/output` 软链接过去）。
 
 Web UI 中配置：

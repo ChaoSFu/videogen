@@ -14,8 +14,9 @@ COMFY_DIR="${COMFY_DIR:-/data/ComfyUI}"
 ENV_NAME="${COMFY_ENV_NAME:-comfyui}"
 export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
-# HuggingFace 下载缓存也放 /data，避免撑爆家目录
+# HuggingFace 下载缓存、pip 缓存也放 /data，避免撑爆根盘
 export HF_HOME="${HF_HOME:-/data/hf-cache}"
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/data/pip-cache}"
 
 if ! command -v conda &>/dev/null; then
     echo "❌ 未找到 conda"; exit 1

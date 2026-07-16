@@ -9,16 +9,20 @@
 set -e
 
 LLM_MODEL="${LLM_MODEL:-qwen3:32b}"
-# 模型库放 /data（大文件统一放 /data）
-OLLAMA_MODELS_DIR="${OLLAMA_MODELS_DIR:-/data/ollama/models}"
+# 程序本体和模型库都放 /data（根盘空间有限），/usr/local/bin 里只放软链接
+OLLAMA_HOME="${OLLAMA_HOME:-/data/ollama}"
+OLLAMA_MODELS_DIR="${OLLAMA_MODELS_DIR:-$OLLAMA_HOME/models}"
 
 # 1. 安装 Ollama（需要 sudo）
 # 官方 install.sh 也是从 github.com 下载，国内直连超时/极慢，
 # 因此直接下二进制包，优先走 GitHub 加速镜像，全部失败才试直连
 install_ollama() {
-    local tgz=/tmp/ollama.tgz
+    local tgz="$OLLAMA_HOME/ollama.tgz"
     local gh_url="github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz"
     local ok=""
+    mkdir -p "$OLLAMA_HOME/dist" 2>/dev/null || {
+        sudo mkdir -p "$OLLAMA_HOME/dist" && sudo chown -R "$USER" "$OLLAMA_HOME"
+    }
     for prefix in "https://ghfast.top/https://" "https://gh-proxy.com/https://" "https://ghproxy.net/https://" "https://"; do
         echo "⬇️  下载: ${prefix}${gh_url}"
         if curl --http1.1 -fL --connect-timeout 15 --retry 2 -o "$tgz" "${prefix}${gh_url}"; then
@@ -27,8 +31,10 @@ install_ollama() {
         echo "⚠️  该源失败，换下一个..."
     done
     [ -n "$ok" ] || { echo "❌ 所有下载源均失败"; return 1; }
-    sudo tar -C /usr/local -xzf "$tgz"
+    # 程序解压到 /data，/usr/local/bin 只放软链接
+    tar -C "$OLLAMA_HOME/dist" -xzf "$tgz"
     rm -f "$tgz"
+    sudo ln -sf "$OLLAMA_HOME/dist/bin/ollama" /usr/local/bin/ollama
     # 注册 systemd 服务（以当前用户运行）
     sudo tee /etc/systemd/system/ollama.service >/dev/null <<UNIT
 [Unit]
@@ -36,7 +42,8 @@ Description=Ollama Service
 After=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/ollama serve
+ExecStart=$OLLAMA_HOME/dist/bin/ollama serve
+Environment="OLLAMA_MODELS=$OLLAMA_MODELS_DIR"
 User=$USER
 Restart=always
 

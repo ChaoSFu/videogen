@@ -13,19 +13,22 @@ LLM_MODEL="${LLM_MODEL:-qwen3:32b}"
 OLLAMA_MODELS_DIR="${OLLAMA_MODELS_DIR:-/data/ollama/models}"
 
 # 1. 安装 Ollama（需要 sudo）
+# 官方 install.sh 也是从 github.com 下载，国内直连超时/极慢，
+# 因此直接下二进制包，优先走 GitHub 加速镜像，全部失败才试直连
 install_ollama() {
-    # 方式1: 官方安装脚本（强制 HTTP/1.1，规避部分网络下的 HTTP2 framing 报错）
-    echo "📥 尝试官方安装脚本..."
-    local script
-    if script=$(curl --http1.1 --retry 3 -fsSL https://ollama.com/install.sh) && [ -n "$script" ]; then
-        echo "$script" | sh && return 0
-    fi
-    # 方式2: 从 GitHub Releases 下载二进制包
-    echo "⚠️  官方脚本下载失败，改从 GitHub Releases 安装..."
-    curl --http1.1 --retry 3 -fL -o /tmp/ollama.tgz \
-        "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz"
-    sudo tar -C /usr/local -xzf /tmp/ollama.tgz
-    rm -f /tmp/ollama.tgz
+    local tgz=/tmp/ollama.tgz
+    local gh_url="github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz"
+    local ok=""
+    for prefix in "https://ghfast.top/https://" "https://gh-proxy.com/https://" "https://ghproxy.net/https://" "https://"; do
+        echo "⬇️  下载: ${prefix}${gh_url}"
+        if curl --http1.1 -fL --connect-timeout 15 --retry 2 -o "$tgz" "${prefix}${gh_url}"; then
+            ok=1; break
+        fi
+        echo "⚠️  该源失败，换下一个..."
+    done
+    [ -n "$ok" ] || { echo "❌ 所有下载源均失败"; return 1; }
+    sudo tar -C /usr/local -xzf "$tgz"
+    rm -f "$tgz"
     # 注册 systemd 服务（以当前用户运行）
     sudo tee /etc/systemd/system/ollama.service >/dev/null <<UNIT
 [Unit]

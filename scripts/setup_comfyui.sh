@@ -17,6 +17,9 @@ export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 # HuggingFace 下载缓存、pip 缓存也放 /data，避免撑爆根盘
 export HF_HOME="${HF_HOME:-/data/hf-cache}"
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/data/pip-cache}"
+# pip 下载/解包的临时目录默认在 /tmp（根盘），大包会塞满根盘，移到 /data
+export TMPDIR="${TMPDIR:-/data/tmp}"
+mkdir -p "$TMPDIR"
 
 if ! command -v conda &>/dev/null; then
     echo "❌ 未找到 conda"; exit 1

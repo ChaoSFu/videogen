@@ -13,6 +13,9 @@ export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
 # pip 下载缓存、Playwright 浏览器都放 /data，避免撑爆根盘
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/data/pip-cache}"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/data/pw-browsers}"
+# pip 临时目录也放 /data，防止大包塞满根盘 /tmp
+export TMPDIR="${TMPDIR:-/data/tmp}"
+mkdir -p "$TMPDIR"
 # Playwright 浏览器走 npmmirror 国内镜像下载
 export PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/playwright}"
 

@@ -24,23 +24,29 @@ install_ollama() {
     }
     # 解压/校验 zst 包需要 zstd
     command -v zstd &>/dev/null || sudo apt-get install -y zstd
-    # 新版发布包为 .tar.zst，旧版为 .tgz，两种都尝试；
-    # 若发现已有完整安装包（如手动 scp 上传的），直接使用
+    # 若发现已有完整安装包（如手动上传的），直接使用
     for asset in ollama-linux-amd64.tar.zst ollama-linux-amd64.tgz; do
         pkg="$OLLAMA_HOME/$asset"
         if [ -s "$pkg" ] && tar -tf "$pkg" >/dev/null 2>&1; then
             echo "✅ 发现已有完整安装包，跳过下载: $pkg"
             ok=1; break
         fi
-        local gh_url="github.com/ollama/ollama/releases/latest/download/$asset"
-        for prefix in "https://ghfast.top/https://" "https://gh-proxy.com/https://" "https://ghproxy.net/https://" "https://"; do
-            echo "⬇️  下载: ${prefix}${gh_url}"
-            if curl --http1.1 -fL -C - --connect-timeout 15 --retry 2 -o "$pkg" "${prefix}${gh_url}"; then
-                ok=1; break 2
+    done
+    # 下载源：ModelScope 国内 CDN 优先，GitHub 加速镜像兜底
+    if [ -z "$ok" ]; then
+        for src in \
+            "https://modelscope.cn/models/modelscope/ollama-linux/resolve/master/ollama-linux-amd64.tar.zst" \
+            "https://ghfast.top/https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tar.zst" \
+            "https://gh-proxy.com/https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tar.zst" \
+            "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tar.zst"; do
+            pkg="$OLLAMA_HOME/$(basename "$src")"
+            echo "⬇️  下载: $src"
+            if curl --http1.1 -fL -C - --connect-timeout 15 --retry 2 -o "$pkg" "$src"; then
+                ok=1; break
             fi
             echo "⚠️  该源失败，换下一个..."
         done
-    done
+    fi
     [ -n "$ok" ] || { echo "❌ 所有下载源均失败"; return 1; }
     # 程序解压到 /data，/usr/local/bin 只放软链接
     case "$pkg" in

@@ -55,7 +55,7 @@ fetch() {
         return
     fi
     echo "⬇️  下载 $repo :: $file"
-    conda run -n "$ENV_NAME" huggingface-cli download "$repo" "$file" --local-dir "$STAGE"
+    conda run --no-capture-output -n "$ENV_NAME" hf download "$repo" "$file" --local-dir "$STAGE"
     mv "$STAGE/$file" "$dest"
 }
 

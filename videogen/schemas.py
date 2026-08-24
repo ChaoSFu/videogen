@@ -60,3 +60,18 @@ class ErrorResponse(BaseModel):
     error: str
     backend: str | None = None
     detail: str | None = None
+
+
+class HistoryEntry(BaseModel):
+    id: str
+    created_at: str
+    backend: str
+    mode: str
+    prompt: str
+    status: Literal["succeeded", "failed"]
+    video_url: str | None = None
+    video_path: str | None = None
+    duration: float | None = None
+    width: int | None = None
+    height: int | None = None
+    error: str | None = None

@@ -49,3 +49,6 @@ tmp/
 # 日志
 logs/
 *.log
+
+# ctl.sh 运行时状态（PID/日志）与生成历史
+run/

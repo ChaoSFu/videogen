@@ -33,6 +33,35 @@ git clone --recurse-submodules <本仓库地址>
 git submodule update --init
 ```
 
+## 进程管理（ctl.sh）
+
+各服务（H3、videogen 统一 API、ComfyUI、Pixelle Web/API）都有自己的
+`scripts/server-*.sh` 前台启动脚本；`scripts/ctl.sh` 在它们外面包了一层
+后台生命周期管理，统一用 PID 文件 + 进程组管理，不需要手动开 tmux/nohup：
+
+```bash
+scripts/ctl.sh start   h3          # 后台启动，日志写到 run/h3.log
+scripts/ctl.sh status               # 查看所有服务状态（不带参数=全部）
+scripts/ctl.sh restart h3           # 先停后起，避免端口占用残留
+scripts/ctl.sh logs    h3           # tail -f 对应日志
+scripts/ctl.sh stop    all          # 停止全部
+
+# service 可选: h3 | videogen | comfyui | pixelle-web | pixelle-api
+```
+
+`restart`/`stop` 按**进程组**整体发信号（不是只 kill 记录的那一个 PID）：
+`conda run` 有时不会把 SIGTERM 正确转发给它启动的子进程（真正干活的
+uvicorn/python），只 kill 父进程会留下孤儿进程继续占着端口和显存。
+`ctl.sh` 用 `setsid` 把每个服务放进独立进程组，`stop` 时对整个组发
+SIGTERM，10 秒未退出再 `SIGKILL` 兜底，保证不留残留进程。
+
+环境变量覆盖方式不变，照常在调用前 export（或写进 `scripts/h3.env`），
+`ctl.sh` 只负责后台化，不改各服务自己的配置逻辑：
+
+```bash
+H3_TE_DEVICE=cuda:0 scripts/ctl.sh restart h3
+```
+
 ## 运行 Pixelle-Video
 
 ```bash
@@ -141,9 +170,17 @@ bash scripts/download_h3.sh
 
 ### 启动
 
+前台调试用原始脚本，日常使用推荐上面的 `scripts/ctl.sh`（后台 + PID 管理，
+避免手动开 tmux）：
+
 ```bash
+# 前台（看实时日志、首次调试用）
 ./scripts/server-h3.sh          # H3 runtime，127.0.0.1:18611
-./scripts/server-videogen.sh    # videogen 统一 API，127.0.0.1:18010（/docs 有接口文档）
+./scripts/server-videogen.sh    # videogen 统一 API，127.0.0.1:18010（/docs 有接口文档，/ui 是网页界面）
+
+# 或后台（日常使用）
+scripts/ctl.sh start h3
+scripts/ctl.sh start videogen
 ```
 
 两个都只监听 `127.0.0.1`，不直接暴露公网。`server-h3.sh` 默认套用上游 README
@@ -172,8 +209,24 @@ ssh -L 18010:localhost:18010 \
     chao@<服务器IP>
 ```
 
-然后本地访问 `http://localhost:18010/docs`（videogen 统一 API），可选
+然后本地访问 `http://localhost:18010/docs`（videogen 统一 API 接口文档）、
+`http://localhost:18010/ui`（videogen 自带的网页界面，见下）、可选
 `http://localhost:18611`（H3 自带的单页 Web UI，直接体验原始功能）。
+
+### Web 界面 + 历史记录
+
+`videogen` 自带一个零构建依赖的单页前端（纯静态 HTML/JS，由 `server-videogen.sh`
+一起启动，无需单独装 Node/跑 npm build），打开 `http://localhost:18010/ui`：
+
+- 填 prompt / 时长 / 分辨率 / seed / 推理步数，点"生成"，H3 是分钟级推理，页面
+  会显示已用时长，完成后原地播放结果视频
+- 下方"历史记录"列出过往生成（成功的带视频预览，失败的显示错误信息），刷新
+  页面不会丢失
+- backend 状态徽章会显示 minimax-h3 是否可达/忙碌（对应 `/v1/backends`）
+
+历史记录存在 `run/history.jsonl`（追加写的 JSON Lines 文件，不是数据库，
+不进 git），每次 `/v1/videos/generate` 调用（无论成功失败）都会记一条；
+`GET /v1/videos?limit=50` 是同一份数据的 API 出口，前端和你自己写脚本都能用。
 
 ### curl 测试
 
@@ -243,14 +296,18 @@ uv run ruff check .
 
 ```
 videogen/            # 统一 API 核心包
-  ├── api.py          # FastAPI: /health /v1/backends /v1/videos/generate
-  ├── schemas.py       # 统一请求/响应模型
+  ├── api.py          # FastAPI: /health /v1/backends /v1/videos/generate /v1/videos /ui
+  ├── schemas.py       # 统一请求/响应模型 + 历史记录模型
   ├── config.py        # 环境变量配置
+  ├── history.py       # 生成历史（JSONL 文件，非数据库）
+  ├── static/          # 零构建依赖的单页前端（/ui）
+  │   └── index.html
   └── backends/        # 各 backend 的 HTTP 客户端（不加载模型）
       ├── base.py       # VideoBackend 协议 + 错误分类
       └── minimax_h3.py # MiniMax-H3 backend
 tests/               # 测试（mock HTTP，不需要 GPU）
-scripts/             # 启动/部署脚本
+scripts/             # 启动/部署脚本 + ctl.sh（后台进程管理）
+run/                 # ctl.sh 的 PID/日志 + 生成历史（gitignore，运行时产生）
 vendor/              # 外部项目（git submodule，模型权重不进 git）
   ├── Pixelle-Video/
   └── Diffusers_minimax-h3/
@@ -269,5 +326,6 @@ Pixelle-Video 的本地配置放在 `config.yaml` / `.env`（已在 .gitignore �
 | `H3_HEALTH_TIMEOUT` | `10` 秒 | `/v1/backends` 健康检查超时，独立于上面 |
 | `H3_HOST` / `H3_PORT` | `127.0.0.1` / `18611` | H3 runtime 自身监听地址（`server-h3.sh`） |
 | `HF_HOME` | `/data/hf-cache` | HuggingFace 缓存目录 |
+| `VIDEOGEN_HISTORY_FILE` | `run/history.jsonl` | 生成历史存储文件（JSON Lines） |
 
 GPU/显存相关的 `H3_LOWVRAM` 等见上面 [MiniMax-H3 backend](#minimax-h3-backend) 一节。

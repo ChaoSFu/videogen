@@ -3,6 +3,8 @@
     GET  /health               liveness of this process (cheap, no backend calls)
     GET  /v1/backends          per-backend reachability + capabilities
     POST /v1/videos/generate   dispatch to the requested backend
+    GET  /v1/videos            generation history (JSONL-backed, see history.py)
+    GET  /ui                   single-page frontend (static, no build step)
 
 This process never loads a video model itself. Each backend is an HTTP
 client to a separately-running runtime process (see videogen/backends/).
@@ -11,13 +13,16 @@ client to a separately-running runtime process (see videogen/backends/).
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from videogen import config
 from videogen.backends import (
     BackendBusyError,
+    BackendError,
     BackendTimeoutError,
     BackendUnavailableError,
     GenerationError,
@@ -25,9 +30,17 @@ from videogen.backends import (
     MiniMaxH3Backend,
     VideoBackend,
 )
-from videogen.schemas import BackendInfo, ErrorResponse, GenerateRequest, GenerateResponse
+from videogen.history import HistoryStore
+from videogen.schemas import (
+    BackendInfo,
+    ErrorResponse,
+    GenerateRequest,
+    GenerateResponse,
+    HistoryEntry,
+)
 
 logger = logging.getLogger("videogen.api")
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def _default_backends() -> dict[str, VideoBackend]:
@@ -40,11 +53,22 @@ def _default_backends() -> dict[str, VideoBackend]:
     }
 
 
-def create_app(backends: dict[str, VideoBackend] | None = None) -> FastAPI:
-    """Factory so tests can inject fake/mocked backends instead of the real
-    HTTP-backed ones without monkeypatching module globals."""
+def create_app(
+    backends: dict[str, VideoBackend] | None = None,
+    history_path: Path | None = None,
+) -> FastAPI:
+    """Factory so tests can inject fake/mocked backends (and an isolated
+    history file) instead of the real HTTP-backed ones / shared state."""
     app = FastAPI(title="videogen", description="统一视频生成服务")
     app.state.backends = backends if backends is not None else _default_backends()
+    app.state.history = HistoryStore(history_path or config.VIDEOGEN_HISTORY_FILE)
+
+    if STATIC_DIR.is_dir():
+        app.mount("/ui", StaticFiles(directory=str(STATIC_DIR), html=True), name="ui")
+
+        @app.get("/", include_in_schema=False)
+        async def root_redirect():
+            return RedirectResponse(url="/ui/")
 
     def _error(status_code: int, error: str, backend: str | None, detail: str) -> JSONResponse:
         return JSONResponse(
@@ -113,12 +137,24 @@ def create_app(backends: dict[str, VideoBackend] | None = None) -> FastAPI:
     async def generate_video(request: GenerateRequest) -> GenerateResponse:
         backend = app.state.backends.get(request.backend)
         if backend is None:
-            raise InvalidRequestError(
+            exc = InvalidRequestError(
                 f"unknown backend {request.backend!r}, available: "
                 f"{list(app.state.backends.keys())}",
                 backend=request.backend,
             )
-        return await backend.generate(request)
+            app.state.history.record_failure(request, str(exc))
+            raise exc
+        try:
+            response = await backend.generate(request)
+        except BackendError as exc:
+            app.state.history.record_failure(request, str(exc))
+            raise
+        app.state.history.record_success(request, response)
+        return response
+
+    @app.get("/v1/videos", response_model=list[HistoryEntry])
+    async def list_history(limit: int = 50) -> list[HistoryEntry]:
+        return app.state.history.list_recent(limit=limit)
 
     return app
 

@@ -111,10 +111,13 @@ echo "📦 [4/6] av / fastapi / uvicorn / python-multipart / pillow / numpy / to
 run_pip install "av==16.0.1" "fastapi==0.104.1" "uvicorn==0.24.0" python-multipart pillow numpy \
     || fail "FastAPI 运行时依赖安装失败"
 # torchvision 未出现在上游 README 的 pip 代码块里，但 transformers 的
-# Qwen3VLVideoProcessor（processor 组件）实际依赖它；缺了不会让请求失败
-# （diffusers 的 ModularPipeline 会跳过这个可选组件），但会让 FL2VA/参考
-# 视频等未来路径用不了，所以补上。版本不锁定，取跟 torch==2.9.0 匹配的即可。
-run_pip install torchvision || echo "⚠️  torchvision 安装失败，跳过（仅影响 video processor 组件，t2va 不受影响）"
+# Qwen3VLVideoProcessor（processor 组件）实际依赖它，缺了会导致 processor
+# 组件静默失败（diffusers 的 ModularPipeline 只打印警告、不抛错），后续
+# t2va 走到 processor.create_mm_token_type_ids() 时才炸 —— 实测验证过，
+# T2VA 必需，不是可选项。必须跟 torch 用同一个 cu128 索引装（不能走
+# PIP_INDEX_URL 那个普通镜像，索引不一致 pip 会长时间 backtrack 卡住）。
+run_pip install torchvision --index-url https://download.pytorch.org/whl/cu128 \
+    || fail "torchvision 安装失败（processor 组件依赖它，t2va 无法正常工作）"
 
 echo "📦 [5/6] bitsandbytes（默认 TE 量化 bnb-4bit 依赖，必需）..."
 run_pip install "bitsandbytes==0.49.0" || fail "bitsandbytes 安装失败"

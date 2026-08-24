@@ -212,8 +212,11 @@ H3 的 409，videogen 统一转换为 `{"error": "backend_busy", "backend": "min
 | `/v1/backends` 里 `minimax-h3.available=false` | H3 runtime 没启动，或 `H3_BASE_URL` 配错；先单独 `curl http://127.0.0.1:18611/api/status` |
 | 生成返回 409 `backend_busy` | H3 全局串行锁，等上一个任务结束再试 |
 | 生成返回 502 `generation_failed` | 看 `scripts/server-h3.sh` 所在终端的日志，通常是 CUDA OOM 或权重未下载完整 |
+| 生成返回 502，detail 是 `'NoneType' object has no attribute 'config'` | H3 自身的已知粗糙点：某个组件（常见是 `H3_TE_DEVICE` 指向的那张卡上的 text_encoder）加载失败后没有正确抛错，日志却打印"加载成功"。**顶层报错看不出真实原因**，去 `server-h3.sh` 终端翻找更早的 `Failed to create component ...` traceback，那里才是根因（实测遇到的是共享 GPU 被其他进程占满导致 OOM，见下一条） |
+| 共享 GPU 上显存被别的用户/进程占用 | 多用户机器常见；`nvidia-smi` 看 `H3_TE_DEVICE` 指向的那张卡剩余显存是否够（bnb-4bit + 剪枝的 32B TE 约需 17GB+）。不够就等对方任务结束，或临时把 `H3_TE_DEVICE` 换到空闲的卡，或改用体积小得多的 `H3_TE_PROJ` 投影 TE（~5GB，见上游 README） |
 | 生成一直不返回直到超时 | 正常现象之一（H3 推理是分钟级），确认 `H3_REQUEST_TIMEOUT` 是否设置得太小 |
 | `setup_h3.sh` 报 GPU 数量不足 2 | 单卡也能跑，但需要去掉/调整 `H3_TE_DEVICE=cuda:1`（没有第二张卡） |
+| `setup_h3.sh` 在建目录时报 `Permission denied`（如 `/data`） | 默认路径 `/data/...` 是给特定服务器约定的，不是所有机器都有；用 `HF_HOME=$HOME/hf-cache H3_OUTPUT_DIR=$HOME/videogen-output/minimax-h3 TMPDIR=$HOME/tmp bash scripts/setup_h3.sh` 改到你有权限的目录，`server-h3.sh` 同理，可以建一个不提交 git 的 `scripts/h3.env` 持久化这些覆盖 |
 | `download_h3.sh` 中途失败 | 直接重跑，`snapshot_download` 会跳过已下载完整的文件，不会重新下载 |
 
 ## 更新子模块到上游最新

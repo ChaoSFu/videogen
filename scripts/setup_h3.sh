@@ -107,9 +107,14 @@ echo "📦 [3/6] transformers / accelerate / safetensors / huggingface_hub ..."
 run_pip install "transformers==5.14.1" "accelerate==1.12.0" safetensors "huggingface_hub[cli]" \
     || fail "transformers 等安装失败"
 
-echo "📦 [4/6] av / fastapi / uvicorn / python-multipart / pillow / numpy ..."
+echo "📦 [4/6] av / fastapi / uvicorn / python-multipart / pillow / numpy / torchvision ..."
 run_pip install "av==16.0.1" "fastapi==0.104.1" "uvicorn==0.24.0" python-multipart pillow numpy \
     || fail "FastAPI 运行时依赖安装失败"
+# torchvision 未出现在上游 README 的 pip 代码块里，但 transformers 的
+# Qwen3VLVideoProcessor（processor 组件）实际依赖它；缺了不会让请求失败
+# （diffusers 的 ModularPipeline 会跳过这个可选组件），但会让 FL2VA/参考
+# 视频等未来路径用不了，所以补上。版本不锁定，取跟 torch==2.9.0 匹配的即可。
+run_pip install torchvision || echo "⚠️  torchvision 安装失败，跳过（仅影响 video processor 组件，t2va 不受影响）"
 
 echo "📦 [5/6] bitsandbytes（默认 TE 量化 bnb-4bit 依赖，必需）..."
 run_pip install "bitsandbytes==0.49.0" || fail "bitsandbytes 安装失败"

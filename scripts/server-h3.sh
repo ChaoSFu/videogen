@@ -1,12 +1,17 @@
 #!/bin/bash
 # 启动 MiniMax-H3 runtime（独立进程，仅监听 127.0.0.1，不直接暴露公网）
 #
-# 默认配置是上游 README 里针对 "48GB (RTX PRO 5000) – Recommended" 的
-# profile，套用到 2×A6000 48GB：
-#   H3_LOWVRAM=1 H3_TE_PRUNE=1 H3_TE_DEVICE=cuda:1 H3_VIDEO_VAE_FP16=1
-#   H3_KEEP_TRANSFORMER=1 H3_ATTN_BACKEND=default
-# A6000 是 Ampere 架构，H3_ATTN_BACKEND 不使用上游默认的 sage（需要
-# sm_120+ 编译的 SageAttention），保持 default（SDPA）。
+# 默认配置：H3_LOWVRAM=1 H3_TE_PRUNE=1 H3_TE_DEVICE=cuda:0 H3_VIDEO_VAE_FP16=1
+# H3_KEEP_TRANSFORMER=1 H3_ATTN_BACKEND=default —— 单卡（cuda:0）同时放
+# transformer + 文本编码器，2026-08-24 在双卡 48GB（RTX 6000 Ada）机器上
+# 实测验证：峰值显存 41.58GB，48GB 卡内完全够用。
+#
+# 上游 README 的 "48GB Recommended" profile 用的是 H3_TE_DEVICE=cuda:1
+# （文本编码器放第二张卡，两张卡各自独立），这在"双卡都基本空闲"的前提下
+# 更快；但共享/多用户机器上第二张卡经常被别人占用，与其每次都要排查
+# cuda:1 上还有多少剩余显存，不如默认就用已验证稳定可行的单卡方案。
+# 如果你的机器双卡确实都空闲、想要 cuda:1 那种独立布局，用环境变量覆盖：
+#   H3_TE_DEVICE=cuda:1 ./scripts/server-h3.sh
 #
 # 所有值都可以在调用时用环境变量覆盖，例如：
 #   H3_LOWVRAM=0 ./scripts/server-h3.sh
@@ -21,10 +26,10 @@ ENV_NAME="${H3_ENV_NAME:-videogen-h3}"
 
 [ -f "$ROOT/scripts/h3.env" ] && source "$ROOT/scripts/h3.env"
 
-# --- 显存/推理配置（2×A6000 48GB 默认值，均可覆盖）---
+# --- 显存/推理配置（单卡 48GB 默认值，均可覆盖，见上方说明）---
 : "${H3_LOWVRAM:=1}"
 : "${H3_TE_PRUNE:=1}"
-: "${H3_TE_DEVICE:=cuda:1}"
+: "${H3_TE_DEVICE:=cuda:0}"
 : "${H3_VIDEO_VAE_FP16:=1}"
 : "${H3_KEEP_TRANSFORMER:=1}"
 : "${H3_ATTN_BACKEND:=default}"

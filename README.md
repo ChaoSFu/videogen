@@ -183,18 +183,24 @@ scripts/ctl.sh start h3
 scripts/ctl.sh start videogen
 ```
 
-两个都只监听 `127.0.0.1`，不直接暴露公网。`server-h3.sh` 默认套用上游 README
-"48GB (RTX PRO 5000) – Recommended" 配置到双卡 A6000：
+两个都只监听 `127.0.0.1`，不直接暴露公网。`server-h3.sh` 默认配置：
 
 ```bash
-H3_LOWVRAM=1 H3_TE_PRUNE=1 H3_TE_DEVICE=cuda:1 H3_VIDEO_VAE_FP16=1 \
+H3_LOWVRAM=1 H3_TE_PRUNE=1 H3_TE_DEVICE=cuda:0 H3_VIDEO_VAE_FP16=1 \
 H3_KEEP_TRANSFORMER=1 H3_ATTN_BACKEND=default
 CUDA_VISIBLE_DEVICES=0,1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 
+单卡（`cuda:0`）同时放 transformer + 文本编码器，2026-08-24 在双卡 48GB
+（RTX 6000 Ada）机器上实测：峰值显存 41.58GB，48GB 卡内够用。上游 README
+的 "48GB Recommended" profile 用的是 `H3_TE_DEVICE=cuda:1`（文本编码器放
+第二张独立卡），在双卡都空闲的前提下更快；但共享机器上第二张卡经常被
+别人的任务占用，与其每次都要排查还剩多少显存，不如默认用这个已验证
+稳定的单卡方案。想用 cuda:1 那种双卡布局：`H3_TE_DEVICE=cuda:1 ./scripts/server-h3.sh`。
+
 任意变量可在调用时覆盖，例如 `H3_LOWVRAM=0 ./scripts/server-h3.sh`；也可以建一个
 不提交 git 的 `scripts/h3.env` 持久化自定义配置。若上游子模块的 README 后续给出
-更适合双卡 A6000 的配置，以子模块当前 README 为准，并同步更新这里。
+更适合你硬件的配置，以子模块当前 README 为准，并同步更新这里。
 
 不影响已有的 `scripts/pixelle-*.sh`、`scripts/server-web.sh`、
 `scripts/server-api.sh`、`scripts/server-comfyui.sh`、Ollama —— 端口互不重叠
@@ -268,7 +274,7 @@ H3 的 409，videogen 统一转换为 `{"error": "backend_busy", "backend": "min
 | 生成返回 502，detail 是 `'NoneType' object has no attribute 'config'` | H3 自身的已知粗糙点：某个组件（常见是 `H3_TE_DEVICE` 指向的那张卡上的 text_encoder）加载失败后没有正确抛错，日志却打印"加载成功"。**顶层报错看不出真实原因**，去 `server-h3.sh` 终端翻找更早的 `Failed to create component ...` traceback，那里才是根因（实测遇到的是共享 GPU 被其他进程占满导致 OOM，见下一条） |
 | 共享 GPU 上显存被别的用户/进程占用 | 多用户机器常见；`nvidia-smi` 看 `H3_TE_DEVICE` 指向的那张卡剩余显存是否够（bnb-4bit + 剪枝的 32B TE 约需 17GB+）。不够就等对方任务结束，或临时把 `H3_TE_DEVICE` 换到空闲的卡，或改用体积小得多的 `H3_TE_PROJ` 投影 TE（~5GB，见上游 README） |
 | 生成一直不返回直到超时 | 正常现象之一（H3 推理是分钟级），确认 `H3_REQUEST_TIMEOUT` 是否设置得太小 |
-| `setup_h3.sh` 报 GPU 数量不足 2 | 单卡也能跑，但需要去掉/调整 `H3_TE_DEVICE=cuda:1`（没有第二张卡） |
+| `setup_h3.sh` 报 GPU 数量不足 2 | 默认配置就是单卡（`cuda:0`），少一张卡也能跑；只有手动切到 `H3_TE_DEVICE=cuda:1` 才需要第二张卡 |
 | `setup_h3.sh` 在建目录时报 `Permission denied`（如 `/data`） | 默认路径 `/data/...` 是给特定服务器约定的，不是所有机器都有；用 `HF_HOME=$HOME/hf-cache H3_OUTPUT_DIR=$HOME/videogen-output/minimax-h3 TMPDIR=$HOME/tmp bash scripts/setup_h3.sh` 改到你有权限的目录，`server-h3.sh` 同理，可以建一个不提交 git 的 `scripts/h3.env` 持久化这些覆盖 |
 | `download_h3.sh` 中途失败 | 直接重跑，`snapshot_download` 会跳过已下载完整的文件，不会重新下载 |
 

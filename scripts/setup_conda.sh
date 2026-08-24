@@ -67,6 +67,11 @@ fi
 echo "📦 安装 Pixelle-Video 依赖（首次较慢）..."
 conda run -n "$ENV_NAME" python -m pip install -e "$ROOT/vendor/Pixelle-Video"
 
+# 5b. 安装 videogen 自身（统一 API：fastapi/uvicorn/httpx，纯 Python，
+#     与 H3 的 CUDA 依赖完全无关，不装进这个主环境的是 H3 本体，见 setup_h3.sh）
+echo "📦 安装 videogen 统一 API 依赖..."
+conda run -n "$ENV_NAME" python -m pip install -e "$ROOT"
+
 # 6. 安装 Playwright 浏览器（HTML 视频帧渲染需要）
 echo "🌐 安装 Playwright chromium..."
 if ! conda run --no-capture-output -n "$ENV_NAME" python -m playwright install chromium; then

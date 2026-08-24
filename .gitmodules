@@ -1,3 +1,6 @@
 [submodule "vendor/Pixelle-Video"]
 	path = vendor/Pixelle-Video
 	url = git@github.com:ATH-MaaS/Pixelle-Video.git
+[submodule "vendor/Diffusers_minimax-h3"]
+	path = vendor/Diffusers_minimax-h3
+	url = git@github.com:animede/Diffusers_minimax-h3.git

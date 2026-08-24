@@ -1,8 +1,23 @@
-服务器部署# videogen
+# videogen
 
-视频生成模型的统一包装层。
+视频生成模型的统一包装层：一个 FastAPI 统一入口，后面接多个相互独立的视频生成
+backend。每个 backend 是一个单独进程/单独 HTTP 服务，videogen 只做请求转发与
+响应归一化，不在自己进程里加载任何模型。
 
-首个接入目标：[Pixelle-Video](https://github.com/ATH-MaaS/Pixelle-Video)（AI 全自动短视频生成引擎：文案 → 配图/视频 → TTS → 合成），以 git submodule 方式引入在 `vendor/Pixelle-Video`。
+## Backends
+
+```
+videogen
+├── Pixelle-Video   —— 自动化短视频工作流（文案 → 配图/视频 → TTS → 合成，经 ComfyUI）
+└── MiniMax-H3      —— 原生 文本/图像/参考 → 音视频 生成模型，不经过 ComfyUI
+```
+
+两者用途不同、互不依赖：
+
+- **Pixelle-Video** = 自动化短视频工作流引擎，内部通过 ComfyUI 调度 Wan2.1/Flux/Qwen-Image 等模型完成配图与合成，适合"一句话主题 → 成片"。
+- **MiniMax-H3** = MiniMax 的原生全模态生成模型（文本/首尾帧/参考图像视频音频 → 视频+音频），直接以 [animede/Diffusers_minimax-h3](https://github.com/animede/Diffusers_minimax-h3)（diffusers 参考实现）作为独立 runtime 接入。**MiniMax-H3 不依赖 ComfyUI**，是与 Pixelle-Video/ComfyUI 完全并行的第二条链路。
+
+均以 git submodule 方式引入 `vendor/`，模型权重不进 git，统一放 `/data`。
 
 ## 环境要求
 
@@ -81,10 +96,131 @@ Web UI 中配置：
 - 本地 ComfyUI：`http://127.0.0.1:8188`
 - TTS：默认 edge-tts（免费）
 
+## MiniMax-H3 backend
+
+原生文本/首尾帧/参考 → 视频+音频生成，**不依赖 ComfyUI**，与 Pixelle-Video/ComfyUI 是两条独立链路：
+
+```
+client
+ ↓ POST /v1/videos/generate
+videogen API (127.0.0.1:18010)
+ ↓ HTTP
+MiniMaxH3Backend
+ ↓ HTTP (POST /api/t2va)
+H3 runtime (127.0.0.1:18611, vendor/Diffusers_minimax-h3)
+ ↓
+2 × A6000 48GB
+ ↓
+MP4
+```
+
+测试硬件：**2 × RTX A6000 48GB**（Ampere 架构，不支持 SageAttention 的 sm_120
+编译版，因此 `H3_ATTN_BACKEND` 默认 `default`，不用上游默认的 `sage`）。
+
+### 安装
+
+```bash
+git submodule update --init -- vendor/Diffusers_minimax-h3   # 首次 clone 用 --recurse-submodules 已包含
+bash scripts/setup_h3.sh
+```
+
+创建独立 conda 环境 `videogen-h3`（Python 3.12，diffusers 固定 commit
+`f37ab93e`、torch 固定 cu128 —— 与主 `videogen` 环境的 3.11 完全隔离，互不
+干扰）。只装环境和依赖，**不下载模型**。
+
+### 下载模型（约 144GB，需显式执行）
+
+```bash
+bash scripts/download_h3.sh
+```
+
+调用上游自带的 `scripts/download_t2va.py`（`huggingface_hub.snapshot_download`
+按需拉取 T2VA/FL2VA 必需子目录，不是仓库全量 498GB），下载到
+`HF_HOME=/data/hf-cache`。会先检查 `/data` 剩余空间并提示确认；中断后重跑本脚本
+即可续传，不会重新下载已完成部分。若仓库需要鉴权，设置 `HF_TOKEN` 环境变量。
+
+### 启动
+
+```bash
+./scripts/server-h3.sh          # H3 runtime，127.0.0.1:18611
+./scripts/server-videogen.sh    # videogen 统一 API，127.0.0.1:18010（/docs 有接口文档）
+```
+
+两个都只监听 `127.0.0.1`，不直接暴露公网。`server-h3.sh` 默认套用上游 README
+"48GB (RTX PRO 5000) – Recommended" 配置到双卡 A6000：
+
+```bash
+H3_LOWVRAM=1 H3_TE_PRUNE=1 H3_TE_DEVICE=cuda:1 H3_VIDEO_VAE_FP16=1 \
+H3_KEEP_TRANSFORMER=1 H3_ATTN_BACKEND=default
+CUDA_VISIBLE_DEVICES=0,1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+```
+
+任意变量可在调用时覆盖，例如 `H3_LOWVRAM=0 ./scripts/server-h3.sh`；也可以建一个
+不提交 git 的 `scripts/h3.env` 持久化自定义配置。若上游子模块的 README 后续给出
+更适合双卡 A6000 的配置，以子模块当前 README 为准，并同步更新这里。
+
+不影响已有的 `scripts/pixelle-*.sh`、`scripts/server-web.sh`、
+`scripts/server-api.sh`、`scripts/server-comfyui.sh`、Ollama —— 端口互不重叠
+（Pixelle Web 17861、Pixelle API 18001、ComfyUI 8188、Ollama 11434、H3 18611、
+videogen API 18010）。
+
+### SSH tunnel
+
+```bash
+ssh -L 18010:localhost:18010 \
+    -L 18611:localhost:18611 \
+    chao@<服务器IP>
+```
+
+然后本地访问 `http://localhost:18010/docs`（videogen 统一 API），可选
+`http://localhost:18611`（H3 自带的单页 Web UI，直接体验原始功能）。
+
+### curl 测试
+
+```bash
+curl -X POST http://127.0.0.1:18010/v1/videos/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "backend": "minimax-h3",
+    "mode": "t2va",
+    "prompt": "A cinematic wide shot of ocean waves under moonlight",
+    "duration": 5,
+    "width": 768,
+    "height": 768,
+    "seed": 42
+  }'
+```
+
+也可以直接跑 `bash scripts/test_h3.sh`（health → backends → 真实生成一次）。
+**注意**：这是需要真实 GPU + 模型权重的人工冒烟测试，不是单元测试，H3 推理是
+分钟级的，`H3_REQUEST_TIMEOUT` 默认 1800 秒。
+
+### 第一阶段能力
+
+- **T2VA**（文本 → 视频+音频）：P0，已完整接入。
+- **FL2VA**（首/尾帧 + 文本 → 视频）：P1，代码结构已预留（`mode="fl2va"`），尚未接入，请求会收到明确的 400 `invalid_request`，不是裸 500。
+- **Ref2VA**（参考图像/视频/音频 + 文本 → 视频）：P2，同上，尚未接入。
+
+H3 runtime 当前生成是全局串行的（同一时间只处理一个请求），第二个请求会收到
+H3 的 409，videogen 统一转换为 `{"error": "backend_busy", "backend": "minimax-h3"}`
+（HTTP 409）。第一期不做排队/调度，接受这个限制。
+
+### 故障排查
+
+| 现象 | 排查方向 |
+|---|---|
+| `/v1/backends` 里 `minimax-h3.available=false` | H3 runtime 没启动，或 `H3_BASE_URL` 配错；先单独 `curl http://127.0.0.1:18611/api/status` |
+| 生成返回 409 `backend_busy` | H3 全局串行锁，等上一个任务结束再试 |
+| 生成返回 502 `generation_failed` | 看 `scripts/server-h3.sh` 所在终端的日志，通常是 CUDA OOM 或权重未下载完整 |
+| 生成一直不返回直到超时 | 正常现象之一（H3 推理是分钟级），确认 `H3_REQUEST_TIMEOUT` 是否设置得太小 |
+| `setup_h3.sh` 报 GPU 数量不足 2 | 单卡也能跑，但需要去掉/调整 `H3_TE_DEVICE=cuda:1`（没有第二张卡） |
+| `download_h3.sh` 中途失败 | 直接重跑，`snapshot_download` 会跳过已下载完整的文件，不会重新下载 |
+
 ## 更新子模块到上游最新
 
 ```bash
 git submodule update --remote vendor/Pixelle-Video
+git submodule update --remote vendor/Diffusers_minimax-h3
 ```
 
 ## 开发
@@ -103,13 +239,32 @@ uv run ruff check .
 ## 目录结构
 
 ```
-videogen/    # 包装层核心包
-tests/       # 测试
-scripts/     # 启动脚本
-vendor/      # 外部项目（git submodule）
-  └── Pixelle-Video/
+videogen/            # 统一 API 核心包
+  ├── api.py          # FastAPI: /health /v1/backends /v1/videos/generate
+  ├── schemas.py       # 统一请求/响应模型
+  ├── config.py        # 环境变量配置
+  └── backends/        # 各 backend 的 HTTP 客户端（不加载模型）
+      ├── base.py       # VideoBackend 协议 + 错误分类
+      └── minimax_h3.py # MiniMax-H3 backend
+tests/               # 测试（mock HTTP，不需要 GPU）
+scripts/             # 启动/部署脚本
+vendor/              # 外部项目（git submodule，模型权重不进 git）
+  ├── Pixelle-Video/
+  └── Diffusers_minimax-h3/
 ```
 
 ## 配置
 
-本地配置放在 `config.yaml` / `.env`（已在 .gitignore 中忽略，勿提交密钥）。
+Pixelle-Video 的本地配置放在 `config.yaml` / `.env`（已在 .gitignore 中忽略，
+勿提交密钥）。videogen 统一 API 与 H3 backend 全部走环境变量，无配置框架：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `VIDEOGEN_HOST` / `VIDEOGEN_PORT` | `127.0.0.1` / `18010` | 统一 API 监听地址 |
+| `H3_BASE_URL` | `http://127.0.0.1:18611` | videogen 访问 H3 runtime 的地址 |
+| `H3_REQUEST_TIMEOUT` | `1800` 秒 | 生成请求超时（分钟级推理，不能用默认 5/30 秒） |
+| `H3_HEALTH_TIMEOUT` | `10` 秒 | `/v1/backends` 健康检查超时，独立于上面 |
+| `H3_HOST` / `H3_PORT` | `127.0.0.1` / `18611` | H3 runtime 自身监听地址（`server-h3.sh`） |
+| `HF_HOME` | `/data/hf-cache` | HuggingFace 缓存目录 |
+
+GPU/显存相关的 `H3_LOWVRAM` 等见上面 [MiniMax-H3 backend](#minimax-h3-backend) 一节。

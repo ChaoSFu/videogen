@@ -226,9 +226,12 @@ ssh -L 18010:localhost:18010 \
 
 - 填 prompt / 时长 / 分辨率 / seed / 推理步数，点"生成"，H3 是分钟级推理，页面
   会显示已用时长，完成后原地播放结果视频
+- 可选上传首帧/尾帧图片（自动切到 FL2VA），有预览缩略图和清除按钮
+- 页面顶部会显示当前正在进行的任务（不管是谁发起的）；并发点"生成"不会报错，
+  会自动排队等轮到自己
 - 下方"历史记录"列出过往生成（成功的带视频预览，失败的显示错误信息），刷新
-  页面不会丢失
-- backend 状态徽章会显示 minimax-h3 是否可达/忙碌（对应 `/v1/backends`）
+  页面不会丢失；点 prompt 文字可以复制完整内容（卡片上只显示两行截断）
+- backend 状态徽章会显示 minimax-h3 是否可达/忙碌/排队数（对应 `/v1/backends`）
 
 历史记录存在 `run/history.jsonl`（追加写的 JSON Lines 文件，不是数据库，
 不进 git），每次 `/v1/videos/generate` 调用（无论成功失败）都会记一条；
@@ -257,12 +260,21 @@ curl -X POST http://127.0.0.1:18010/v1/videos/generate \
 ### 第一阶段能力
 
 - **T2VA**（文本 → 视频+音频）：P0，已完整接入。
-- **FL2VA**（首/尾帧 + 文本 → 视频）：P1，代码结构已预留（`mode="fl2va"`），尚未接入，请求会收到明确的 400 `invalid_request`，不是裸 500。
-- **Ref2VA**（参考图像/视频/音频 + 文本 → 视频）：P2，同上，尚未接入。
+- **FL2VA**（首/尾帧图片 + 文本 → 视频）：P1，已接入。Web 界面（`/ui`）里
+  "首帧图片"/"尾帧图片" 上传任意一个即自动切到 FL2VA；API 直接调用时通过
+  `options.first_frame` / `options.last_frame` 传 base64 图片（可以是
+  `data:image/png;base64,...` 这种带前缀的形式，前端就是这么传的，也可以
+  是不带前缀的纯 base64）。两个至少要传一个，否则在打到 H3 之前就会被
+  videogen 自己拒绝（400），不会浪费一次 H3 请求。
+- **Ref2VA**（参考图像/视频/音频 + 文本 → 视频）：P2，代码结构已预留
+  （`mode="ref2va"`），尚未接入，请求会收到明确的 400 `invalid_request`，
+  不是裸 500。
 
-H3 runtime 当前生成是全局串行的（同一时间只处理一个请求），第二个请求会收到
-H3 的 409，videogen 统一转换为 `{"error": "backend_busy", "backend": "minimax-h3"}`
-（HTTP 409）。第一期不做排队/调度，接受这个限制。
+H3 runtime 生成是全局串行的（同一时间只处理一个请求），但 videogen 自己
+会排队：并发请求不会收到 H3 的 409，而是自动等上一个跑完再轮到自己（见
+`videogen/coordinator.py`，进程内 `asyncio.Lock`，没有引入 Redis/Celery）。
+`GET /v1/videos/current` 暴露当前正在跑的任务，`/ui` 页面顶部会显示这个
+横幅——不管任务是页面自己发起的、别的标签页还是直接 curl 打过来的。
 
 ### 故障排查
 

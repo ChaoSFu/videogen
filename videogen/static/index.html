@@ -90,12 +90,17 @@
   .current-job { background: rgba(217,164,65,.08); border: 1px solid rgba(217,164,65,.35); border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; display: none; }
   .current-job .cj-prompt { color: var(--text); margin: 4px 0 0; }
   .current-job .cj-meta { color: var(--warn); display: flex; align-items: center; gap: 8px; }
+  .frame-upload { display: flex; align-items: center; gap: 10px; }
+  .frame-upload input[type=file] { width: auto; flex: 1; font-size: 12px; }
+  .frame-preview { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); display: none; }
+  .frame-clear { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 4px 8px; font-size: 12px; font-weight: 400; cursor: pointer; display: none; }
+  .hint { font-size: 12px; color: var(--muted); margin: -8px 0 14px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>videogen</h1>
-  <p class="sub">统一视频生成服务 — 当前 backend：MiniMax-H3（T2VA）</p>
+  <p class="sub">统一视频生成服务 — 当前 backend：MiniMax-H3（T2VA / FL2VA）</p>
 
   <div id="current-job" class="current-job">
     <div class="cj-meta"><span class="spinner"></span> <span id="cj-text"></span></div>
@@ -109,6 +114,25 @@
       <label for="prompt">Prompt</label>
       <textarea id="prompt" placeholder="A cinematic wide shot of ocean waves under moonlight"></textarea>
     </div>
+    <div class="row two">
+      <div class="field">
+        <label for="first-frame">首帧图片（可选）</label>
+        <div class="frame-upload">
+          <input type="file" id="first-frame" accept="image/*">
+          <img id="first-frame-preview" class="frame-preview">
+          <button type="button" class="frame-clear" id="first-frame-clear" onclick="clearFrame('first-frame')">清除</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="last-frame">尾帧图片（可选）</label>
+        <div class="frame-upload">
+          <input type="file" id="last-frame" accept="image/*">
+          <img id="last-frame-preview" class="frame-preview">
+          <button type="button" class="frame-clear" id="last-frame-clear" onclick="clearFrame('last-frame')">清除</button>
+        </div>
+      </div>
+    </div>
+    <p class="hint">上传首帧和/或尾帧图片会自动切到 FL2VA 模式（图生视频）；都不传就是纯文字 T2VA。</p>
     <div class="row">
       <div class="field">
         <label for="duration">时长（秒）</label>
@@ -154,6 +178,35 @@ const API = "";
 function widthHeight() {
   const [w, h] = document.getElementById("resolution").value.split("x").map(Number);
   return { width: w, height: h };
+}
+
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function clearFrame(inputId) {
+  document.getElementById(inputId).value = "";
+  const preview = document.getElementById(`${inputId}-preview`);
+  preview.src = "";
+  preview.style.display = "none";
+  document.getElementById(`${inputId}-clear`).style.display = "none";
+}
+
+for (const id of ["first-frame", "last-frame"]) {
+  document.getElementById(id).addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    const preview = document.getElementById(`${id}-preview`);
+    const clearBtn = document.getElementById(`${id}-clear`);
+    if (!file) { preview.style.display = "none"; clearBtn.style.display = "none"; return; }
+    preview.src = await readFileAsDataURL(file);
+    preview.style.display = "block";
+    clearBtn.style.display = "inline-block";
+  });
 }
 
 function fmtTime(iso) {
@@ -229,14 +282,20 @@ async function generate() {
   }
 
   const { width, height } = widthHeight();
+  const firstFrame = document.getElementById("first-frame-preview").src || "";
+  const lastFrame = document.getElementById("last-frame-preview").src || "";
+  const hasFrame = firstFrame.startsWith("data:") || lastFrame.startsWith("data:");
+
   const body = {
     backend: "minimax-h3",
-    mode: "t2va",
+    mode: hasFrame ? "fl2va" : "t2va",
     prompt,
     duration: parseFloat(document.getElementById("duration").value) || 5,
     width, height,
     options: { num_inference_steps: parseInt(document.getElementById("steps").value, 10) || 30 },
   };
+  if (firstFrame.startsWith("data:")) body.options.first_frame = firstFrame;
+  if (lastFrame.startsWith("data:")) body.options.last_frame = lastFrame;
   const seedVal = document.getElementById("seed").value;
   if (seedVal !== "") body.seed = parseInt(seedVal, 10);
 
@@ -264,7 +323,7 @@ async function generate() {
       const video = document.getElementById("result-video");
       video.src = data.output.video_url || "";
       document.getElementById("result-meta").innerHTML =
-        `时长 ${data.output.duration?.toFixed(2)}s · ${data.output.width}×${data.output.height} · ` +
+        `${data.mode} · 时长 ${data.output.duration?.toFixed(2)}s · ${data.output.width}×${data.output.height} · ` +
         `seed ${data.metadata.seed} · 耗时 ${data.metadata.generation_time_s?.toFixed(1)}s · ` +
         `峰值显存 ${data.metadata.peak_vram_gb} GB`;
       resultPanel.scrollIntoView({ behavior: "smooth" });
@@ -303,14 +362,14 @@ async function refreshHistory() {
           <video src="${it.video_url || ''}" controls preload="metadata"></video>
           <div class="hc-body">
             <p class="hc-prompt" title="点击复制完整 Prompt">${prompt}</p>
-            <div class="hc-meta"><span>${fmtTime(it.created_at)}</span><span class="badge ok">成功</span></div>
+            <div class="hc-meta"><span>${it.mode} · ${fmtTime(it.created_at)}</span><span class="badge ok">成功</span></div>
           </div>
         </div>`;
       }
       return `<div class="history-card">
         <div class="hc-fail">
           <p class="hc-prompt" title="点击复制完整 Prompt">${prompt}</p>
-          <div class="hc-meta"><span>${fmtTime(it.created_at)}</span><span class="badge err">失败</span></div>
+          <div class="hc-meta"><span>${it.mode} · ${fmtTime(it.created_at)}</span><span class="badge err">失败</span></div>
         </div>
       </div>`;
     }).join("");

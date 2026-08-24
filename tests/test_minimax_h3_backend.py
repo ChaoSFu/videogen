@@ -8,6 +8,8 @@ source for the ground truth this is pinned against).
 
 from __future__ import annotations
 
+import base64
+
 import httpx
 import pytest
 
@@ -161,17 +163,114 @@ async def test_unreachable_runtime_during_generate():
         await backend.generate(t2va_request())
 
 
-# --- unsupported modes (extension points for FL2VA/Ref2VA) -------------
+# --- fl2va --------------------------------------------------------------
+
+TINY_IMAGE_B64 = base64.b64encode(b"not-really-a-png-just-test-bytes").decode()
 
 
-async def test_fl2va_mode_not_yet_implemented():
+def fl2va_request(**overrides) -> GenerateRequest:
+    defaults = {
+        "backend": "minimax-h3",
+        "mode": "fl2va",
+        "prompt": "a cat walking through rainy Tokyo at night",
+        "duration": 5.0,
+        "width": 768,
+        "height": 768,
+    }
+    defaults.update(overrides)
+    return GenerateRequest(**defaults)
+
+
+def fl2va_result_json(**overrides) -> dict:
+    data = {
+        "mp4_path": "/data/videogen-output/minimax-h3/fl2va123.mp4",
+        "mp4_filename": "fl2va123.mp4",
+        "video_url": "/outputs/fl2va123.mp4",
+        "duration_s": 5.19,
+        "width": 768,
+        "height": 768,
+        "seed": 7,
+        "num_inference_steps": 30,
+        "total_elapsed_s": 40.2,
+        "peak_vram_gb": 43.1,
+        "job_id": "fl2va123",
+    }
+    data.update(overrides)
+    return data
+
+
+async def test_fl2va_sends_multipart_with_first_frame():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["content_type"] = request.headers.get("content-type", "")
+        captured["body"] = request.read()
+        return httpx.Response(200, json=fl2va_result_json())
+
+    backend = make_backend(handler)
+    request = fl2va_request(options={"first_frame": f"data:image/png;base64,{TINY_IMAGE_B64}"})
+    response = await backend.generate(request)
+
+    assert captured["path"] == "/api/fl2va"
+    assert "multipart/form-data" in captured["content_type"]
+    body = captured["body"]
+    assert b'name="image"' in body
+    assert b'name="last_image"' not in body  # only first_frame was supplied
+    assert b'name="prompt"' in body
+    assert request.prompt.encode() in body
+
+    assert response.status == "succeeded"
+    assert response.mode == "fl2va"
+    assert response.output.video_url == f"{BASE_URL}/outputs/fl2va123.mp4"
+
+
+async def test_fl2va_sends_both_frames_when_both_supplied():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read()
+        return httpx.Response(200, json=fl2va_result_json())
+
+    backend = make_backend(handler)
+    request = fl2va_request(
+        options={"first_frame": TINY_IMAGE_B64, "last_frame": TINY_IMAGE_B64}
+    )
+    await backend.generate(request)
+
+    assert b'name="image"' in captured["body"]
+    assert b'name="last_image"' in captured["body"]
+
+
+async def test_fl2va_without_any_frame_is_rejected_before_hitting_h3():
     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
-        raise AssertionError("should not reach the H3 runtime for an unsupported mode")
+        raise AssertionError("should not reach the H3 runtime with no image at all")
 
     backend = make_backend(handler)
     with pytest.raises(InvalidRequestError) as exc_info:
-        await backend.generate(t2va_request(mode="fl2va"))
-    assert "fl2va" in str(exc_info.value)
+        await backend.generate(fl2va_request())  # no first_frame/last_frame in options
+    assert "first_frame" in str(exc_info.value) or "last_frame" in str(exc_info.value)
+
+
+async def test_fl2va_invalid_base64_is_rejected_before_hitting_h3():
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("should not reach the H3 runtime with undecodable image data")
+
+    backend = make_backend(handler)
+    with pytest.raises(InvalidRequestError):
+        await backend.generate(fl2va_request(options={"first_frame": "not valid base64!!"}))
+
+
+async def test_fl2va_busy_maps_to_backend_busy_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json={"detail": "別の生成が進行中です。"})
+
+    backend = make_backend(handler)
+    with pytest.raises(BackendBusyError):
+        await backend.generate(fl2va_request(options={"first_frame": TINY_IMAGE_B64}))
+
+
+# --- unsupported modes (extension point for Ref2VA) ---------------------
 
 
 async def test_ref2va_mode_not_yet_implemented():
@@ -188,5 +287,5 @@ def test_capabilities_lists_all_modes_without_network():
     caps = backend.capabilities()
     assert caps["requires_comfyui"] is False
     assert caps["modes"]["t2va"]["status"] == "available"
-    assert caps["modes"]["fl2va"]["status"] == "planned"
+    assert caps["modes"]["fl2va"]["status"] == "available"
     assert caps["modes"]["ref2va"]["status"] == "planned"

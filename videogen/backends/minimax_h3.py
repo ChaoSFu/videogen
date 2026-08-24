@@ -10,18 +10,22 @@ Endpoint mapping is taken directly from the upstream app.py source (not
 guessed from prose docs):
   GET  /api/status  -> {"busy": bool, "progress": ..., "runner": ..., ...}
   POST /api/t2va     -> multipart/form-data (Form fields, no file upload)
-                        raises 400 (bad request) / 409 (generation_lock busy)
-                        / 500 (generation failed) via HTTPException, JSON
-                        body {"detail": "..."} in all three cases.
+  POST /api/fl2va    -> multipart/form-data (same Form fields as t2va, plus
+                        optional `image`/`last_image` file uploads; at
+                        least one of the two is required)
+  Both raise 400 (bad request) / 409 (generation_lock busy) / 500
+  (generation failed) via HTTPException, JSON body {"detail": "..."} in
+  all three cases, and share the same response shape (both call
+  app.py's `_run_generation` -> `core/runner.py`'s `generate()`).
 
-Only t2va (P0) is wired up to real generation. fl2va/ref2va (P1/P2) are
-listed in capabilities() as "planned" and rejected with InvalidRequestError
-until implemented — see _build_fl2va_form / _build_ref2va_form stubs below
-for where that work plugs in.
+t2va (P0) and fl2va (P1) are wired up to real generation. ref2va (P2) is
+listed in capabilities() as "planned" and rejected with
+InvalidRequestError until implemented.
 """
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 import httpx
@@ -43,6 +47,19 @@ def _form_value(value: Any) -> Any:
     if isinstance(value, bool):
         return "true" if value else "false"
     return value
+
+
+def _decode_image(label: str, data_url_or_b64: str) -> bytes:
+    """Accepts either a raw base64 string or a `data:image/...;base64,...`
+    data URL (what browsers' FileReader.readAsDataURL produces — the
+    frontend sends these as-is rather than stripping the prefix client-side)."""
+    payload = data_url_or_b64
+    if payload.startswith("data:"):
+        _, _, payload = payload.partition(",")
+    try:
+        return base64.b64decode(payload, validate=True)
+    except Exception as exc:
+        raise InvalidRequestError(f"{label} is not valid base64: {exc}") from exc
 
 
 class MiniMaxH3Backend(VideoBackend):
@@ -71,7 +88,7 @@ class MiniMaxH3Backend(VideoBackend):
                     "description": "text -> video + audio",
                 },
                 "fl2va": {
-                    "status": "planned",
+                    "status": "available",
                     "description": "first/last frame + text -> video",
                 },
                 "ref2va": {
@@ -99,19 +116,51 @@ class MiniMaxH3Backend(VideoBackend):
     async def generate(self, request: GenerateRequest) -> GenerateResponse:
         if request.mode == "t2va":
             return await self._generate_t2va(request)
+        if request.mode == "fl2va":
+            return await self._generate_fl2va(request)
         raise InvalidRequestError(
             f"mode={request.mode!r} is not implemented yet for backend {self.name!r} "
-            "(only 't2va' is supported in this phase; fl2va/ref2va are planned)",
+            "(t2va/fl2va are supported in this phase; ref2va is planned)",
             backend=self.name,
         )
 
     async def _generate_t2va(self, request: GenerateRequest) -> GenerateResponse:
-        form = self._build_t2va_form(request)
+        form = self._build_shared_form(request)
+        data = await self._call_h3("/api/t2va", data=form)
+        return self._normalize_result(request, data)
+
+    async def _generate_fl2va(self, request: GenerateRequest) -> GenerateResponse:
+        options = request.options or {}
+        first_frame = options.get("first_frame")
+        last_frame = options.get("last_frame")
+        if not first_frame and not last_frame:
+            raise InvalidRequestError(
+                "fl2va requires options.first_frame and/or options.last_frame "
+                "(base64-encoded image, optionally a data: URL)",
+                backend=self.name,
+            )
+
+        form = self._build_shared_form(request)
+        files: dict[str, tuple[str, bytes, str]] = {}
+        if first_frame:
+            files["image"] = ("first_frame.png", _decode_image("first_frame", first_frame), "image/png")
+        if last_frame:
+            files["last_image"] = ("last_frame.png", _decode_image("last_frame", last_frame), "image/png")
+
+        data = await self._call_h3("/api/fl2va", data=form, files=files)
+        return self._normalize_result(request, data)
+
+    async def _call_h3(
+        self,
+        path: str,
+        data: dict[str, Any],
+        files: dict[str, tuple[str, bytes, str]] | None = None,
+    ) -> dict[str, Any]:
         try:
             async with httpx.AsyncClient(
                 timeout=self._request_timeout, transport=self._transport
             ) as client:
-                resp = await client.post(f"{self.base_url}/api/t2va", data=form)
+                resp = await client.post(f"{self.base_url}{path}", data=data, files=files)
         except httpx.TimeoutException as exc:
             raise BackendTimeoutError(
                 f"H3 generation timed out after {self._request_timeout}s", backend=self.name
@@ -133,10 +182,11 @@ class MiniMaxH3Backend(VideoBackend):
             raise GenerationError(
                 f"unexpected status {resp.status_code}: {self._detail(resp)}", backend=self.name
             )
+        return resp.json()
 
-        return self._normalize_t2va(request, resp.json())
-
-    def _build_t2va_form(self, request: GenerateRequest) -> dict[str, Any]:
+    def _build_shared_form(self, request: GenerateRequest) -> dict[str, Any]:
+        """Form fields common to /api/t2va and /api/fl2va (both take the
+        same Form(...) signature modulo the fl2va-only file uploads)."""
         options = request.options or {}
         form: dict[str, Any] = {
             "prompt": request.prompt,
@@ -155,7 +205,7 @@ class MiniMaxH3Backend(VideoBackend):
                 form[key] = options[key]
         return {k: _form_value(v) for k, v in form.items()}
 
-    def _normalize_t2va(self, request: GenerateRequest, data: dict[str, Any]) -> GenerateResponse:
+    def _normalize_result(self, request: GenerateRequest, data: dict[str, Any]) -> GenerateResponse:
         video_url = f"{self.base_url}{data['video_url']}" if data.get("video_url") else None
         output = VideoOutput(
             video_path=data.get("mp4_path"),

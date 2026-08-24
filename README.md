@@ -168,6 +168,17 @@ bash scripts/download_h3.sh
 `HF_HOME=/data/hf-cache`。会先检查 `/data` 剩余空间并提示确认；中断后重跑本脚本
 即可续传，不会重新下载已完成部分。若仓库需要鉴权，设置 `HF_TOKEN` 环境变量。
 
+**想用 Ref2VA 的话额外多跑一步**（`transformer_ref` 组件，T2VA/FL2VA 不需要，
+不含在上面这 144GB 里，约 67GB）：
+
+```bash
+bash scripts/download_ref2va.sh
+```
+
+不提前下的话，第一次 Ref2VA 请求会在处理过程中现场触发这个下载——`/api/progress`
+显示 `phase=loading_transformer` 但 GPU 显存几乎不涨，会误以为卡住了，其实是在
+后台拉文件（实测踩过这个坑）。提前跑这一步就不会有这个问题。
+
 ### 启动
 
 前台调试用原始脚本，日常使用推荐上面的 `scripts/ctl.sh`（后台 + PID 管理，
@@ -281,7 +292,9 @@ curl -X POST http://127.0.0.1:18010/v1/videos/generate \
   （`filename`/`content_type` 可省略，省略时按 `data:` URL 或文件名猜测；
   真正的图/视频/音频类型判定是 H3 自己做的，我们只负责把文件转发过去）。
   最多 12 个（H3 自己的限制是 ≤9 图 + ≤3 视频 + ≤3 音频），超过或一个都不传
-  会在打到 H3 之前就被 videogen 拒绝（400）。
+  会在打到 H3 之前就被 videogen 拒绝（400）。**首次使用前跑
+  `bash scripts/download_ref2va.sh`**（约 67GB，`download_h3.sh` 不含这部分），
+  否则第一次 Ref2VA 请求会现场下载，看起来像卡住了，见故障排查。
 
 H3 runtime 生成是全局串行的（同一时间只处理一个请求），但 videogen 自己
 会排队：并发请求不会收到 H3 的 409，而是自动等上一个跑完再轮到自己（见
@@ -303,6 +316,7 @@ H3 runtime 生成是全局串行的（同一时间只处理一个请求），但
 | `setup_h3.sh` 报 GPU 数量不足 2 | 默认配置就是单卡（`cuda:0`），少一张卡也能跑；只有手动切到 `H3_TE_DEVICE=cuda:1` 才需要第二张卡 |
 | `setup_h3.sh` 在建目录时报 `Permission denied`（如 `/data`） | 默认路径 `/data/...` 是给特定服务器约定的，不是所有机器都有；用 `HF_HOME=$HOME/hf-cache H3_OUTPUT_DIR=$HOME/videogen-output/minimax-h3 TMPDIR=$HOME/tmp bash scripts/setup_h3.sh` 改到你有权限的目录，`server-h3.sh` 同理，可以建一个不提交 git 的 `scripts/h3.env` 持久化这些覆盖 |
 | `download_h3.sh` 中途失败 | 直接重跑，`snapshot_download` 会跳过已下载完整的文件，不会重新下载 |
+| Ref2VA 请求"卡住不动"，`nvidia-smi` 显存却几乎不涨 | 大概率没提前跑 `download_ref2va.sh`，H3 在现场下载 `transformer_ref` 组件（约 67GB，13+分钟起）。用 `curl http://127.0.0.1:18611/api/progress` 确认，`phase` 是 `loading_transformer` 且 `message` 提到 `transformer_ref` 就是这个情况——等它下完就会正常继续；以后跑一次 `download_ref2va.sh` 避免每次都发生 |
 
 ## 更新子模块到上游最新
 

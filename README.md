@@ -299,6 +299,7 @@ H3 runtime 生成是全局串行的（同一时间只处理一个请求），但
 | 生成返回 502，detail 是 `'NoneType' object has no attribute 'config'` | H3 自身的已知粗糙点：某个组件（常见是 `H3_TE_DEVICE` 指向的那张卡上的 text_encoder）加载失败后没有正确抛错，日志却打印"加载成功"。**顶层报错看不出真实原因**，去 `server-h3.sh` 终端翻找更早的 `Failed to create component ...` traceback，那里才是根因（实测遇到的是共享 GPU 被其他进程占满导致 OOM，见下一条） |
 | 共享 GPU 上显存被别的用户/进程占用 | 多用户机器常见；`nvidia-smi` 看 `H3_TE_DEVICE` 指向的那张卡剩余显存是否够（bnb-4bit + 剪枝的 32B TE 约需 17GB+）。不够就等对方任务结束，或临时把 `H3_TE_DEVICE` 换到空闲的卡，或改用体积小得多的 `H3_TE_PROJ` 投影 TE（~5GB，见上游 README） |
 | 生成一直不返回直到超时 | 正常现象之一（H3 推理是分钟级），确认 `H3_REQUEST_TIMEOUT` 是否设置得太小 |
+| 生成返回 400，detail 提到 `num_frames ... must be between ... got 362` 之类 | H3 的视频 VAE 只能编码 `17n+5` 帧的视频，`duration` 按 24fps 换算取整后如果超过 `MAX_SECONDS*24`（360 帧）就报这个错——实测 15s 会取整到 362 帧，超限。实际安全上限是 14.375s（345 帧）。`/ui` 页面已经会自动把超限的时长夹到 14.375s 并提示；直接调 API/curl 不经过这层前端防护，自己传 `duration` 时避免超过 14.375 |
 | `setup_h3.sh` 报 GPU 数量不足 2 | 默认配置就是单卡（`cuda:0`），少一张卡也能跑；只有手动切到 `H3_TE_DEVICE=cuda:1` 才需要第二张卡 |
 | `setup_h3.sh` 在建目录时报 `Permission denied`（如 `/data`） | 默认路径 `/data/...` 是给特定服务器约定的，不是所有机器都有；用 `HF_HOME=$HOME/hf-cache H3_OUTPUT_DIR=$HOME/videogen-output/minimax-h3 TMPDIR=$HOME/tmp bash scripts/setup_h3.sh` 改到你有权限的目录，`server-h3.sh` 同理，可以建一个不提交 git 的 `scripts/h3.env` 持久化这些覆盖 |
 | `download_h3.sh` 中途失败 | 直接重跑，`snapshot_download` 会跳过已下载完整的文件，不会重新下载 |

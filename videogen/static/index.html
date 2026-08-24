@@ -151,8 +151,8 @@
     <p class="hint">Prompt 始终生效，不管有没有传图片/参考文件。图片/参考文件决定用哪个模式——上传了参考文件走 Ref2VA，没传参考文件但传了首/尾帧走 FL2VA，都没传就是纯文字 T2VA；三者选其一，不会同时按两种模式生成。</p>
     <div class="row">
       <div class="field">
-        <label for="duration">时长（秒）</label>
-        <input id="duration" type="number" value="5" min="1" step="0.5">
+        <label for="duration">时长（秒，5–14.4）</label>
+        <input id="duration" type="number" value="5" min="5" max="14.4" step="0.5">
       </div>
       <div class="field">
         <label for="resolution">分辨率</label>
@@ -190,6 +190,37 @@
 
 <script>
 const API = "";
+
+// H3 的时长约束：视频 VAE 只能编码 17n+5 帧的视频，请求的秒数会先按
+// fps 换算成帧数，再向上取整到最近一个 17n+5——如果这个取整结果超过
+// MAX_SECONDS*fps（360 帧），H3 直接 400，而不是再夹回 360（实测遇到过：
+// 请求 15s -> 360 帧 -> 取整到 362 帧 -> 超限报错）。所以前端能安全用到
+// 的时长上限不是 15s，是取整后仍 <=360 帧的最大值，即 345 帧 / 14.375s。
+// 这几个常数来自 H3 自己的 core/runner.py（FPS/frame_step/frame_offset/
+// MIN_SECONDS/MAX_SECONDS），不是我们发明的，上游要是改了这里也要同步改。
+const H3_FPS = 24, H3_FRAME_STEP = 17, H3_FRAME_OFFSET = 5;
+const H3_MIN_SECONDS = 5, H3_MAX_SECONDS = 15;
+const H3_MAX_FRAMES = H3_MAX_SECONDS * H3_FPS; // 360，硬上限
+const H3_MAX_SAFE_FRAMES = Math.floor((H3_MAX_FRAMES - H3_FRAME_OFFSET) / H3_FRAME_STEP) * H3_FRAME_STEP + H3_FRAME_OFFSET; // 345
+const H3_MAX_SAFE_SECONDS = H3_MAX_SAFE_FRAMES / H3_FPS; // 14.375
+
+function h3RoundedFrames(seconds) {
+  const raw = seconds * H3_FPS;
+  const n = Math.max(0, Math.ceil((raw - H3_FRAME_OFFSET) / H3_FRAME_STEP));
+  return n * H3_FRAME_STEP + H3_FRAME_OFFSET;
+}
+
+// 提交前夹到安全范围，避免"填了个 UI 允许但 H3 会拒绝"的时长——返回
+// 实际会用的秒数；如果做了调整，clamped 为 true 方便调用方提示用户。
+function clampDurationToSafeRange(seconds) {
+  let clamped = false;
+  if (seconds < H3_MIN_SECONDS) { seconds = H3_MIN_SECONDS; clamped = true; }
+  if (seconds > H3_MAX_SECONDS || h3RoundedFrames(seconds) > H3_MAX_FRAMES) {
+    seconds = H3_MAX_SAFE_SECONDS;
+    clamped = true;
+  }
+  return { seconds, clamped };
+}
 
 function widthHeight() {
   const [w, h] = document.getElementById("resolution").value.split("x").map(Number);
@@ -345,11 +376,21 @@ async function generate() {
   if (hasRefs) mode = "ref2va";
   else if (hasFrame) mode = "fl2va";
 
+  const durationInput = document.getElementById("duration");
+  const { seconds: duration, clamped } = clampDurationToSafeRange(parseFloat(durationInput.value) || 5);
+  if (clamped) {
+    durationInput.value = duration;
+    errorBox.style.display = "block";
+    errorBox.textContent =
+      `时长已自动调整为 ${duration}s——H3 只能编码特定帧数的视频，15s 按 24fps 取整后会超过它自己的硬上限，` +
+      `实际能用的上限是 ${H3_MAX_SAFE_SECONDS}s。已继续提交本次生成，之后可以直接用调整后的值。`;
+  }
+
   const body = {
     backend: "minimax-h3",
     mode,
     prompt,
-    duration: parseFloat(document.getElementById("duration").value) || 5,
+    duration,
     width, height,
     options: { num_inference_steps: parseInt(document.getElementById("steps").value, 10) || 30 },
   };

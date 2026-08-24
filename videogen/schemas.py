@@ -52,8 +52,18 @@ class BackendInfo(BaseModel):
     name: str
     available: bool
     busy: bool | None = None
+    queue_depth: int = 0
     capabilities: dict[str, Any]
     detail: str | None = None
+
+
+class CurrentJobInfo(BaseModel):
+    backend: str
+    mode: str
+    prompt: str
+    started_at: float
+    elapsed_s: float
+    queue_depth: int = 0
 
 
 class ErrorResponse(BaseModel):

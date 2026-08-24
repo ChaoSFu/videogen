@@ -7,9 +7,11 @@ error -> HTTP status mapping that videogen/api.py owns.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -47,6 +49,35 @@ class FakeBackend(VideoBackend):
         if self._generate_error:
             raise self._generate_error
         return self._generate_result
+
+
+class SlowFakeBackend(VideoBackend):
+    """Backend whose generate() takes a moment and records call overlap,
+    so concurrency/queueing behavior can actually be observed instead of
+    just asserted against a backend that returns instantly."""
+
+    name = "minimax-h3"
+
+    def __init__(self, delay: float = 0.05):
+        self.delay = delay
+        self.call_log: list[str] = []
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def health(self) -> dict[str, Any]:
+        return {"reachable": True, "busy": False}
+
+    def capabilities(self) -> dict[str, Any]:
+        return {"backend": self.name, "requires_comfyui": False, "modes": {"t2va": {"status": "available"}}}
+
+    async def generate(self, request: GenerateRequest) -> GenerateResponse:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        self.call_log.append(f"start:{request.prompt}")
+        await asyncio.sleep(self.delay)
+        self.call_log.append(f"end:{request.prompt}")
+        self.in_flight -= 1
+        return sample_success_response()
 
 
 def make_client(backend: VideoBackend, tmp_path: Path) -> TestClient:
@@ -235,6 +266,69 @@ def test_history_respects_limit(tmp_path):
     entries = client.get("/v1/videos?limit=2").json()
     assert len(entries) == 2
     assert entries[0]["prompt"] == "prompt 4"
+
+
+# --- queueing (needs real async concurrency, not the sync TestClient) ----
+
+
+async def test_concurrent_generate_requests_queue_instead_of_409(tmp_path):
+    backend = SlowFakeBackend(delay=0.05)
+    app = create_app({"minimax-h3": backend}, history_path=tmp_path / "history.jsonl")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        results = await asyncio.gather(
+            client.post("/v1/videos/generate", json=sample_request_body(prompt="first")),
+            client.post("/v1/videos/generate", json=sample_request_body(prompt="second")),
+        )
+
+    # Neither request should see H3's 409 — both queue and both succeed.
+    assert [r.status_code for r in results] == [200, 200]
+    # And they must not have actually run concurrently against the backend.
+    assert backend.max_in_flight == 1
+    assert backend.call_log == ["start:first", "end:first", "start:second", "end:second"]
+
+
+async def test_current_job_reflects_in_flight_request(tmp_path):
+    backend = SlowFakeBackend(delay=0.1)
+    app = create_app({"minimax-h3": backend}, history_path=tmp_path / "history.jsonl")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        assert (await client.get("/v1/videos/current")).json() is None
+
+        task = asyncio.create_task(
+            client.post("/v1/videos/generate", json=sample_request_body(prompt="watch me"))
+        )
+        await asyncio.sleep(0.02)  # let the request actually start running
+
+        current = (await client.get("/v1/videos/current")).json()
+        assert current is not None
+        assert current["prompt"] == "watch me"
+        assert current["backend"] == "minimax-h3"
+
+        await task
+        assert (await client.get("/v1/videos/current")).json() is None
+
+
+async def test_backends_endpoint_reports_queue_depth(tmp_path):
+    backend = SlowFakeBackend(delay=0.1)
+    app = create_app({"minimax-h3": backend}, history_path=tmp_path / "history.jsonl")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        task1 = asyncio.create_task(
+            client.post("/v1/videos/generate", json=sample_request_body(prompt="a"))
+        )
+        await asyncio.sleep(0.02)
+        task2 = asyncio.create_task(
+            client.post("/v1/videos/generate", json=sample_request_body(prompt="b"))
+        )
+        await asyncio.sleep(0.02)
+
+        backends = (await client.get("/v1/backends")).json()
+        assert backends[0]["queue_depth"] == 1
+
+        await asyncio.gather(task1, task2)
+        backends = (await client.get("/v1/backends")).json()
+        assert backends[0]["queue_depth"] == 0
 
 
 def test_ui_is_served(tmp_path):

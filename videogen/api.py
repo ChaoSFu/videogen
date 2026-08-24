@@ -1,9 +1,10 @@
 """Unified videogen FastAPI service.
 
     GET  /health               liveness of this process (cheap, no backend calls)
-    GET  /v1/backends          per-backend reachability + capabilities
-    POST /v1/videos/generate   dispatch to the requested backend
+    GET  /v1/backends          per-backend reachability + capabilities + queue depth
+    POST /v1/videos/generate   dispatch to the requested backend (auto-queues, see coordinator.py)
     GET  /v1/videos            generation history (JSONL-backed, see history.py)
+    GET  /v1/videos/current    the in-flight job for a backend, if any (for UI polling)
     GET  /ui                   single-page frontend (static, no build step)
 
 This process never loads a video model itself. Each backend is an HTTP
@@ -30,9 +31,11 @@ from videogen.backends import (
     MiniMaxH3Backend,
     VideoBackend,
 )
+from videogen.coordinator import BackendCoordinator
 from videogen.history import HistoryStore
 from videogen.schemas import (
     BackendInfo,
+    CurrentJobInfo,
     ErrorResponse,
     GenerateRequest,
     GenerateResponse,
@@ -62,6 +65,12 @@ def create_app(
     app = FastAPI(title="videogen", description="统一视频生成服务")
     app.state.backends = backends if backends is not None else _default_backends()
     app.state.history = HistoryStore(history_path or config.VIDEOGEN_HISTORY_FILE)
+    app.state.coordinators: dict[str, BackendCoordinator] = {}
+
+    def _coordinator(name: str) -> BackendCoordinator:
+        if name not in app.state.coordinators:
+            app.state.coordinators[name] = BackendCoordinator()
+        return app.state.coordinators[name]
 
     if STATIC_DIR.is_dir():
         app.mount("/ui", StaticFiles(directory=str(STATIC_DIR), html=True), name="ui")
@@ -112,6 +121,7 @@ def create_app(
     async def list_backends() -> list[BackendInfo]:
         infos: list[BackendInfo] = []
         for name, backend in app.state.backends.items():
+            queue_depth = _coordinator(name).queue_depth
             try:
                 health_result = await backend.health()
                 infos.append(
@@ -119,6 +129,7 @@ def create_app(
                         name=name,
                         available=True,
                         busy=health_result.get("busy"),
+                        queue_depth=queue_depth,
                         capabilities=backend.capabilities(),
                     )
                 )
@@ -127,6 +138,7 @@ def create_app(
                     BackendInfo(
                         name=name,
                         available=False,
+                        queue_depth=queue_depth,
                         capabilities=backend.capabilities(),
                         detail=str(exc),
                     )
@@ -144,8 +156,15 @@ def create_app(
             )
             app.state.history.record_failure(request, str(exc))
             raise exc
+        # H3 (and likely any single-GPU-process backend) only runs one
+        # generation at a time; queue here instead of surfacing H3's own
+        # 409 and making the caller retry — a concurrent request just
+        # waits its turn, see coordinator.py.
+        coordinator = _coordinator(request.backend)
         try:
-            response = await backend.generate(request)
+            response = await coordinator.run(
+                request.backend, request.mode, request.prompt, lambda: backend.generate(request)
+            )
         except BackendError as exc:
             app.state.history.record_failure(request, str(exc))
             raise
@@ -155,6 +174,13 @@ def create_app(
     @app.get("/v1/videos", response_model=list[HistoryEntry])
     async def list_history(limit: int = 50) -> list[HistoryEntry]:
         return app.state.history.list_recent(limit=limit)
+
+    @app.get("/v1/videos/current", response_model=CurrentJobInfo | None)
+    async def current_job() -> CurrentJobInfo | None:
+        for coordinator in app.state.coordinators.values():
+            if coordinator.current:
+                return CurrentJobInfo(**coordinator.current.to_dict(), queue_depth=coordinator.queue_depth)
+        return None
 
     return app
 

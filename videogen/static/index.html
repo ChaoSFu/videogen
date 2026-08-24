@@ -79,18 +79,28 @@
   .history-card { background: #0d0f13; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .history-card video { border-radius: 0; }
   .history-card .hc-body { padding: 10px; }
-  .history-card .hc-prompt { font-size: 12px; color: var(--text); margin: 0 0 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .history-card .hc-prompt { font-size: 12px; color: var(--text); margin: 0 0 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; transition: color .15s; }
+  .history-card .hc-prompt:hover { color: var(--accent); }
+  .history-card .hc-prompt.copied { color: var(--ok) !important; }
   .history-card .hc-meta { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; }
   .history-card .hc-fail { padding: 10px; font-size: 12px; color: var(--err); }
   .empty { color: var(--muted); font-size: 13px; }
   .backend-line { font-size: 12px; color: var(--muted); margin-top: -6px; margin-bottom: 14px; }
   .error-box { background: rgba(239,83,80,.1); border: 1px solid rgba(239,83,80,.3); color: #ff9d9a; border-radius: 6px; padding: 10px 12px; font-size: 13px; margin-top: 12px; }
+  .current-job { background: rgba(217,164,65,.08); border: 1px solid rgba(217,164,65,.35); border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; display: none; }
+  .current-job .cj-prompt { color: var(--text); margin: 4px 0 0; }
+  .current-job .cj-meta { color: var(--warn); display: flex; align-items: center; gap: 8px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>videogen</h1>
   <p class="sub">统一视频生成服务 — 当前 backend：MiniMax-H3（T2VA）</p>
+
+  <div id="current-job" class="current-job">
+    <div class="cj-meta"><span class="spinner"></span> <span id="cj-text"></span></div>
+    <p class="cj-prompt" id="cj-prompt"></p>
+  </div>
 
   <div class="panel">
     <h2>生成新视频</h2>
@@ -160,15 +170,35 @@ async function refreshBackends() {
     const backends = await resp.json();
     const h3 = backends.find(b => b.name === "minimax-h3");
     if (!h3) { el.textContent = "未找到 minimax-h3 backend"; return; }
+    const queueNote = h3.queue_depth > 0 ? `，另有 ${h3.queue_depth} 个排队中` : "";
     if (!h3.available) {
       el.innerHTML = `<span class="badge err">不可达</span> ${h3.detail || "H3 runtime 未启动"}`;
     } else if (h3.busy) {
-      el.innerHTML = `<span class="badge busy">忙碌</span> 正在处理其他生成请求，H3 是全局串行的`;
+      el.innerHTML = `<span class="badge busy">忙碌</span> 正在处理其他生成请求，H3 是全局串行的，新请求会自动排队${queueNote}`;
     } else {
-      el.innerHTML = `<span class="badge ok">就绪</span> minimax-h3`;
+      el.innerHTML = `<span class="badge ok">就绪</span> minimax-h3${queueNote}`;
     }
   } catch (e) {
     el.innerHTML = `<span class="badge err">无法连接</span> ${e}`;
+  }
+}
+
+// 轮询"当前正在跑的任务"——不管是这个页面自己发起的、别的标签页、
+// 还是直接 curl 打过来的，只要 H3 正在处理，这里都会显示，解决
+// "刷新页面看不到正在进行中的任务"的问题。
+async function refreshCurrentJob() {
+  const box = document.getElementById("current-job");
+  try {
+    const resp = await fetch(`${API}/v1/videos/current`);
+    const job = resp.status === 200 ? await resp.json() : null;
+    if (!job) { box.style.display = "none"; return; }
+    box.style.display = "block";
+    const queueNote = job.queue_depth > 0 ? `，后面还有 ${job.queue_depth} 个排队` : "";
+    document.getElementById("cj-text").textContent =
+      `${job.backend} 正在生成中，已用时 ${Math.floor(job.elapsed_s)}s${queueNote}`;
+    document.getElementById("cj-prompt").textContent = job.prompt;
+  } catch (e) {
+    box.style.display = "none";
   }
 }
 
@@ -251,6 +281,12 @@ async function generate() {
   }
 }
 
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s;
+  return div.innerHTML;
+}
+
 async function refreshHistory() {
   const el = document.getElementById("history");
   try {
@@ -261,18 +297,19 @@ async function refreshHistory() {
       return;
     }
     el.innerHTML = items.map(it => {
+      const prompt = escapeHtml(it.prompt);
       if (it.status === "succeeded") {
         return `<div class="history-card">
           <video src="${it.video_url || ''}" controls preload="metadata"></video>
           <div class="hc-body">
-            <p class="hc-prompt" title="${it.prompt.replace(/"/g, '&quot;')}">${it.prompt}</p>
+            <p class="hc-prompt" title="点击复制完整 Prompt">${prompt}</p>
             <div class="hc-meta"><span>${fmtTime(it.created_at)}</span><span class="badge ok">成功</span></div>
           </div>
         </div>`;
       }
       return `<div class="history-card">
         <div class="hc-fail">
-          <p class="hc-prompt" title="${it.prompt.replace(/"/g, '&quot;')}">${it.prompt}</p>
+          <p class="hc-prompt" title="点击复制完整 Prompt">${prompt}</p>
           <div class="hc-meta"><span>${fmtTime(it.created_at)}</span><span class="badge err">失败</span></div>
         </div>
       </div>`;
@@ -282,8 +319,46 @@ async function refreshHistory() {
   }
 }
 
+// 点击 prompt 复制完整内容（卡片里只显示两行截断）——事件委托到
+// 容器上，避免给每张卡片单独绑定/在 innerHTML 里内联转义文本。
+document.getElementById("history").addEventListener("click", async (e) => {
+  const el = e.target.closest(".hc-prompt");
+  if (!el) return;
+  const text = el.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    // Clipboard API 不可用时的兜底（老浏览器/非安全上下文）
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch (e2) { /* 放弃 */ }
+    document.body.removeChild(ta);
+  }
+  el.classList.add("copied");
+  setTimeout(() => el.classList.remove("copied"), 800);
+});
+
+// 轮询"当前任务"，一旦从"有任务"变成"没任务"就顺带刷新历史和 backend 状态——
+// 这样即使生成是别的标签页/curl 发起的，这个页面也会自动跟着更新，不用手动刷新。
+let _hadJob = false;
+setInterval(async () => {
+  await refreshCurrentJob();
+  const box = document.getElementById("current-job");
+  const hasJob = box.style.display === "block";
+  if (_hadJob && !hasJob) {
+    refreshHistory();
+    refreshBackends();
+  }
+  _hadJob = hasJob;
+}, 3000);
+
 refreshBackends();
 refreshHistory();
+refreshCurrentJob();
 </script>
 </body>
 </html>

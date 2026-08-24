@@ -26,9 +26,24 @@ H3_OUTPUT_DIR="${H3_OUTPUT_DIR:-/data/videogen-output/minimax-h3}"
 export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/data/pip-cache}"
 export TMPDIR="${TMPDIR:-/data/tmp}"
-mkdir -p "$TMPDIR"
 
-fail() { echo "❌ $1"; exit 1; }
+fail() { echo "❌ $*"; exit 1; }
+
+# 建目录：直接建 -> 建不了就 sudo 建并 chown 给当前用户（会按需提示输入密码）
+# -> 两者都不行就明确报错退出（而不是在后面某个 mkdir 处莫名其妙地炸）。
+ensure_dir() {
+    local dir="$1"
+    [ -d "$dir" ] && return 0
+    mkdir -p "$dir" 2>/dev/null && return 0
+    if command -v sudo &>/dev/null && sudo mkdir -p "$dir" 2>/dev/null; then
+        sudo chown "$USER" "$dir" && return 0
+    fi
+    fail "无法创建 $dir（无写权限，sudo 也不可用）。请用环境变量把相关路径指到你有权限的目录，例如: " \
+        "HF_HOME=\$HOME/hf-cache H3_OUTPUT_DIR=\$HOME/videogen-output/minimax-h3 TMPDIR=\$HOME/tmp bash scripts/setup_h3.sh"
+}
+
+ensure_dir "$TMPDIR"
+ensure_dir "$PIP_CACHE_DIR"
 
 # 1-2. GPU 检查（不足两张只警告，不阻断——环境搭建本身不需要 GPU）
 echo "🖥  GPU 检查..."
@@ -103,9 +118,8 @@ echo "📦 [6/6] torchao（int8 量化，可选，失败不阻断）..."
 run_pip install "torchao==0.17.0" || echo "⚠️  torchao 安装失败，跳过（仅影响可选的 int8 量化路径）"
 
 # 7. HuggingFace 缓存目录 + 生成产物目录（统一放 /data）
-mkdir -p "$HF_HOME" "$H3_OUTPUT_DIR" 2>/dev/null || {
-    sudo mkdir -p "$HF_HOME" "$H3_OUTPUT_DIR" && sudo chown "$USER" "$HF_HOME" "$H3_OUTPUT_DIR"
-}
+ensure_dir "$HF_HOME"
+ensure_dir "$H3_OUTPUT_DIR"
 
 # 上游 outputs/ 路径是硬编码在 app.py 里的（BASE_DIR / "outputs"），不可配置，
 # 最小侵入方案：软链到 /data，不改 vendor 代码。

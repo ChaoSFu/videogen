@@ -20,6 +20,11 @@ set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 H3_DIR="$ROOT/vendor/Diffusers_minimax-h3"
 ENV_NAME="${H3_ENV_NAME:-videogen-h3}"
+
+# 如果 scripts/h3.env 存在会先加载它（跟 server-h3.sh 等一致），例如把
+# HF_HOME/H3_OUTPUT_DIR/TMPDIR 固定指到没有 /data 的机器上的路径。
+[ -f "$ROOT/scripts/h3.env" ] && source "$ROOT/scripts/h3.env"
+
 HF_HOME="${HF_HOME:-/data/hf-cache}"
 H3_OUTPUT_DIR="${H3_OUTPUT_DIR:-/data/videogen-output/minimax-h3}"
 

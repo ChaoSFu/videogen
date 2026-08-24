@@ -148,7 +148,7 @@
       <input type="file" id="ref-files" accept="image/*,video/*,audio/*" multiple>
       <div id="ref-list" class="ref-list"></div>
     </div>
-    <p class="hint">三种输入二选一生效，优先级：参考文件（Ref2VA）&gt; 首/尾帧图片（FL2VA）&gt; 纯文字（T2VA）。</p>
+    <p class="hint">Prompt 始终生效，不管有没有传图片/参考文件。图片/参考文件决定用哪个模式——上传了参考文件走 Ref2VA，没传参考文件但传了首/尾帧走 FL2VA，都没传就是纯文字 T2VA；三者选其一，不会同时按两种模式生成。</p>
     <div class="row">
       <div class="field">
         <label for="duration">时长（秒）</label>

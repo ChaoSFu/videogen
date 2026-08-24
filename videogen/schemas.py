@@ -72,6 +72,24 @@ class ErrorResponse(BaseModel):
     detail: str | None = None
 
 
+class RequestSummary(BaseModel):
+    """Enough of the original request to repopulate the generate form
+    ("复用"/reuse) without re-sending large binary payloads. Image/video/
+    audio reference data (fl2va's first_frame/last_frame, ref2va's
+    references) is deliberately NOT stored here — see `had_media_inputs`."""
+
+    mode: str
+    prompt: str
+    duration: float
+    width: int
+    height: int
+    seed: int | None = None
+    # options with any base64 media payloads (first_frame/last_frame/
+    # references) stripped out — num_inference_steps/turbo/cache/etc. only.
+    options: dict[str, Any] = Field(default_factory=dict)
+    had_media_inputs: bool = False
+
+
 class HistoryEntry(BaseModel):
     id: str
     created_at: str
@@ -85,3 +103,4 @@ class HistoryEntry(BaseModel):
     width: int | None = None
     height: int | None = None
     error: str | None = None
+    request_summary: RequestSummary | None = None

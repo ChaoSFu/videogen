@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -174,6 +174,20 @@ def create_app(
     @app.get("/v1/videos", response_model=list[HistoryEntry])
     async def list_history(limit: int = 50) -> list[HistoryEntry]:
         return app.state.history.list_recent(limit=limit)
+
+    @app.delete("/v1/videos/{entry_id}", status_code=204)
+    async def delete_history_entry(entry_id: str) -> None:
+        entry = app.state.history.delete(entry_id)
+        if entry is None:
+            raise HTTPException(404, f"no history entry with id {entry_id!r}")
+        if entry.video_path:
+            try:
+                Path(entry.video_path).unlink(missing_ok=True)
+            except OSError as exc:
+                # The record is gone either way — a file we couldn't remove
+                # (permissions, already-gone, different mount) shouldn't
+                # turn a successful delete into an error response.
+                logger.warning("could not delete video file %s: %s", entry.video_path, exc)
 
     @app.get("/v1/videos/current", response_model=CurrentJobInfo | None)
     async def current_job() -> CurrentJobInfo | None:

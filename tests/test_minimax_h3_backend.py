@@ -270,16 +270,128 @@ async def test_fl2va_busy_maps_to_backend_busy_error():
         await backend.generate(fl2va_request(options={"first_frame": TINY_IMAGE_B64}))
 
 
-# --- unsupported modes (extension point for Ref2VA) ---------------------
+# --- ref2va --------------------------------------------------------------
 
 
-async def test_ref2va_mode_not_yet_implemented():
+def ref2va_request(**overrides) -> GenerateRequest:
+    defaults = {
+        "backend": "minimax-h3",
+        "mode": "ref2va",
+        "prompt": "a character consistent across scenes",
+        "duration": 5.0,
+        "width": 768,
+        "height": 768,
+    }
+    defaults.update(overrides)
+    return GenerateRequest(**defaults)
+
+
+def ref2va_result_json(**overrides) -> dict:
+    data = {
+        "mp4_path": "/data/videogen-output/minimax-h3/ref123.mp4",
+        "mp4_filename": "ref123.mp4",
+        "video_url": "/outputs/ref123.mp4",
+        "duration_s": 5.19,
+        "width": 768,
+        "height": 768,
+        "seed": 3,
+        "num_inference_steps": 30,
+        "total_elapsed_s": 55.0,
+        "peak_vram_gb": 44.0,
+        "job_id": "ref123",
+    }
+    data.update(overrides)
+    return data
+
+
+async def test_ref2va_sends_multipart_with_repeated_references_field():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["content_type"] = request.headers.get("content-type", "")
+        captured["body"] = request.read()
+        return httpx.Response(200, json=ref2va_result_json())
+
+    backend = make_backend(handler)
+    request = ref2va_request(
+        options={
+            "references": [
+                {"data": TINY_IMAGE_B64, "filename": "ref1.png", "content_type": "image/png"},
+                {"data": f"data:audio/wav;base64,{TINY_IMAGE_B64}", "filename": "ref2.wav"},
+            ]
+        }
+    )
+    response = await backend.generate(request)
+
+    assert captured["path"] == "/api/ref2va"
+    assert "multipart/form-data" in captured["content_type"]
+    body = captured["body"]
+    # Both references go under the SAME repeated field name "references".
+    assert body.count(b'name="references"') == 2
+    assert b'filename="ref1.png"' in body
+    assert b'filename="ref2.wav"' in body
+    assert b"image/png" in body
+    assert b"audio/wav" in body  # taken from the data: URL, not guessed
+
+    assert response.status == "succeeded"
+    assert response.mode == "ref2va"
+    assert response.output.video_url == f"{BASE_URL}/outputs/ref123.mp4"
+
+
+async def test_ref2va_guesses_content_type_from_filename_when_not_given():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read()
+        return httpx.Response(200, json=ref2va_result_json())
+
+    backend = make_backend(handler)
+    request = ref2va_request(options={"references": [{"data": TINY_IMAGE_B64, "filename": "photo.jpg"}]})
+    await backend.generate(request)
+
+    assert b"image/jpeg" in captured["body"]
+
+
+async def test_ref2va_without_any_reference_is_rejected_before_hitting_h3():
     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
-        raise AssertionError("should not reach the H3 runtime for an unsupported mode")
+        raise AssertionError("should not reach the H3 runtime with no references at all")
+
+    backend = make_backend(handler)
+    with pytest.raises(InvalidRequestError) as exc_info:
+        await backend.generate(ref2va_request())  # no options.references
+    assert "references" in str(exc_info.value)
+
+
+async def test_ref2va_too_many_references_is_rejected_before_hitting_h3():
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("should not reach the H3 runtime with an over-limit reference count")
+
+    backend = make_backend(handler)
+    too_many = [{"data": TINY_IMAGE_B64, "filename": f"r{i}.png"} for i in range(13)]
+    with pytest.raises(InvalidRequestError) as exc_info:
+        await backend.generate(ref2va_request(options={"references": too_many}))
+    assert "12" in str(exc_info.value)
+
+
+async def test_ref2va_reference_missing_data_field_is_rejected():
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("should not reach the H3 runtime with a malformed reference")
 
     backend = make_backend(handler)
     with pytest.raises(InvalidRequestError):
-        await backend.generate(t2va_request(mode="ref2va"))
+        await backend.generate(ref2va_request(options={"references": [{"filename": "no-data.png"}]}))
+
+
+async def test_ref2va_busy_maps_to_backend_busy_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json={"detail": "別の生成が進行中です。"})
+
+    backend = make_backend(handler)
+    with pytest.raises(BackendBusyError):
+        await backend.generate(
+            ref2va_request(options={"references": [{"data": TINY_IMAGE_B64, "filename": "r.png"}]})
+        )
 
 
 def test_capabilities_lists_all_modes_without_network():
@@ -288,4 +400,4 @@ def test_capabilities_lists_all_modes_without_network():
     assert caps["requires_comfyui"] is False
     assert caps["modes"]["t2va"]["status"] == "available"
     assert caps["modes"]["fl2va"]["status"] == "available"
-    assert caps["modes"]["ref2va"]["status"] == "planned"
+    assert caps["modes"]["ref2va"]["status"] == "available"

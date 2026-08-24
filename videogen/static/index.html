@@ -95,12 +95,23 @@
   .frame-preview { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); display: none; }
   .frame-clear { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 4px 8px; font-size: 12px; font-weight: 400; cursor: pointer; display: none; }
   .hint { font-size: 12px; color: var(--muted); margin: -8px 0 14px; }
+  .ref-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .ref-chip { display: flex; align-items: center; gap: 6px; background: #0d0f13; border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px 3px 3px; font-size: 12px; max-width: 220px; }
+  .ref-chip img { width: 22px; height: 22px; object-fit: cover; border-radius: 50%; flex-shrink: 0; }
+  .ref-chip .ref-icon { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--border); font-size: 12px; flex-shrink: 0; }
+  .ref-chip .ref-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ref-chip .ref-remove { cursor: pointer; color: var(--muted); font-weight: 700; padding: 0 2px; flex-shrink: 0; }
+  .ref-chip .ref-remove:hover { color: var(--err); }
+  .hc-actions { display: flex; gap: 6px; margin-top: 8px; }
+  .hc-btn { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 3px 9px; font-size: 11px; font-weight: 400; cursor: pointer; }
+  .hc-btn:hover { color: var(--text); border-color: var(--accent); }
+  .hc-btn.danger:hover { color: var(--err); border-color: var(--err); }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>videogen</h1>
-  <p class="sub">统一视频生成服务 — 当前 backend：MiniMax-H3（T2VA / FL2VA）</p>
+  <p class="sub">统一视频生成服务 — 当前 backend：MiniMax-H3（T2VA / FL2VA / Ref2VA）</p>
 
   <div id="current-job" class="current-job">
     <div class="cj-meta"><span class="spinner"></span> <span id="cj-text"></span></div>
@@ -132,7 +143,12 @@
         </div>
       </div>
     </div>
-    <p class="hint">上传首帧和/或尾帧图片会自动切到 FL2VA 模式（图生视频）；都不传就是纯文字 T2VA。</p>
+    <div class="field">
+      <label for="ref-files">参考图片/视频/音频（可选，Ref2VA — 最多 9 图 + 3 视频 + 3 音频，合计 12 个）</label>
+      <input type="file" id="ref-files" accept="image/*,video/*,audio/*" multiple>
+      <div id="ref-list" class="ref-list"></div>
+    </div>
+    <p class="hint">三种输入二选一生效，优先级：参考文件（Ref2VA）&gt; 首/尾帧图片（FL2VA）&gt; 纯文字（T2VA）。</p>
     <div class="row">
       <div class="field">
         <label for="duration">时长（秒）</label>
@@ -208,6 +224,43 @@ for (const id of ["first-frame", "last-frame"]) {
     clearBtn.style.display = "inline-block";
   });
 }
+
+// Ref2VA 参考文件：累积到一个数组里（而不是依赖 <input multiple> 自己的
+// FileList——那样每次选择会覆盖上一次，没法"分几次挑文件"），每个 chip
+// 带缩略图/类型图标 + 删除按钮。
+let refFiles = []; // { file, dataUrl, kind }
+
+function refKind(file) {
+  if (file.type.startsWith("image/")) return "image";
+  if (file.type.startsWith("video/")) return "video";
+  if (file.type.startsWith("audio/")) return "audio";
+  return "file";
+}
+
+function renderRefList() {
+  const el = document.getElementById("ref-list");
+  el.innerHTML = refFiles.map((rf, i) => {
+    const icon = rf.kind === "image"
+      ? `<img src="${rf.dataUrl}">`
+      : `<span class="ref-icon">${rf.kind === "video" ? "🎬" : rf.kind === "audio" ? "🎵" : "📄"}</span>`;
+    return `<span class="ref-chip">${icon}<span class="ref-name" title="${escapeHtml(rf.file.name)}">${escapeHtml(rf.file.name)}</span><span class="ref-remove" data-remove-ref="${i}">×</span></span>`;
+  }).join("");
+}
+
+document.getElementById("ref-files").addEventListener("change", async (e) => {
+  for (const file of e.target.files) {
+    refFiles.push({ file, dataUrl: await readFileAsDataURL(file), kind: refKind(file) });
+  }
+  e.target.value = ""; // 清空 input 本身的选择状态，方便再挑文件追加
+  renderRefList();
+});
+
+document.getElementById("ref-list").addEventListener("click", (e) => {
+  const idx = e.target.getAttribute("data-remove-ref");
+  if (idx === null) return;
+  refFiles.splice(Number(idx), 1);
+  renderRefList();
+});
 
 function fmtTime(iso) {
   try {
@@ -285,17 +338,29 @@ async function generate() {
   const firstFrame = document.getElementById("first-frame-preview").src || "";
   const lastFrame = document.getElementById("last-frame-preview").src || "";
   const hasFrame = firstFrame.startsWith("data:") || lastFrame.startsWith("data:");
+  const hasRefs = refFiles.length > 0;
+
+  // 优先级：参考文件(ref2va) > 首/尾帧(fl2va) > 纯文字(t2va)，三选一。
+  let mode = "t2va";
+  if (hasRefs) mode = "ref2va";
+  else if (hasFrame) mode = "fl2va";
 
   const body = {
     backend: "minimax-h3",
-    mode: hasFrame ? "fl2va" : "t2va",
+    mode,
     prompt,
     duration: parseFloat(document.getElementById("duration").value) || 5,
     width, height,
     options: { num_inference_steps: parseInt(document.getElementById("steps").value, 10) || 30 },
   };
-  if (firstFrame.startsWith("data:")) body.options.first_frame = firstFrame;
-  if (lastFrame.startsWith("data:")) body.options.last_frame = lastFrame;
+  if (mode === "ref2va") {
+    body.options.references = refFiles.map(rf => ({
+      data: rf.dataUrl, filename: rf.file.name, content_type: rf.file.type || undefined,
+    }));
+  } else if (mode === "fl2va") {
+    if (firstFrame.startsWith("data:")) body.options.first_frame = firstFrame;
+    if (lastFrame.startsWith("data:")) body.options.last_frame = lastFrame;
+  }
   const seedVal = document.getElementById("seed").value;
   if (seedVal !== "") body.seed = parseInt(seedVal, 10);
 
@@ -346,23 +411,33 @@ function escapeHtml(s) {
   return div.innerHTML;
 }
 
+// 缓存最近一次 /v1/videos 的结果，按 id 查——复用/删除按钮点击时不用
+// 再发一次请求，直接从这里取（含 request_summary，历史卡片本身不显示它）。
+let _historyById = {};
+
 async function refreshHistory() {
   const el = document.getElementById("history");
   try {
     const resp = await fetch(`${API}/v1/videos?limit=24`);
     const items = await resp.json();
+    _historyById = Object.fromEntries(items.map(it => [it.id, it]));
     if (!items.length) {
       el.innerHTML = `<div class="empty">还没有生成记录</div>`;
       return;
     }
     el.innerHTML = items.map(it => {
       const prompt = escapeHtml(it.prompt);
+      const actions = `<div class="hc-actions">
+        <button type="button" class="hc-btn" data-reuse="${it.id}">复用</button>
+        <button type="button" class="hc-btn danger" data-delete="${it.id}">删除</button>
+      </div>`;
       if (it.status === "succeeded") {
         return `<div class="history-card">
           <video src="${it.video_url || ''}" controls preload="metadata"></video>
           <div class="hc-body">
             <p class="hc-prompt" title="点击复制完整 Prompt">${prompt}</p>
             <div class="hc-meta"><span>${it.mode} · ${fmtTime(it.created_at)}</span><span class="badge ok">成功</span></div>
+            ${actions}
           </div>
         </div>`;
       }
@@ -370,6 +445,7 @@ async function refreshHistory() {
         <div class="hc-fail">
           <p class="hc-prompt" title="点击复制完整 Prompt">${prompt}</p>
           <div class="hc-meta"><span>${it.mode} · ${fmtTime(it.created_at)}</span><span class="badge err">失败</span></div>
+          ${actions}
         </div>
       </div>`;
     }).join("");
@@ -378,9 +454,49 @@ async function refreshHistory() {
   }
 }
 
-// 点击 prompt 复制完整内容（卡片里只显示两行截断）——事件委托到
-// 容器上，避免给每张卡片单独绑定/在 innerHTML 里内联转义文本。
+// 复用：把这条记录当时的 prompt/时长/分辨率/seed/推理步数填回表单，方便
+// 在此基础上改改再生成。fl2va/ref2va 用到的图片/参考文件不会存进历史
+// （避免历史文件被塞满二进制数据），所以那种记录复用后需要重新上传。
+function reuseEntry(id) {
+  const entry = _historyById[id];
+  const rs = entry && entry.request_summary;
+  if (!rs) return;
+  document.getElementById("prompt").value = rs.prompt;
+  document.getElementById("duration").value = rs.duration;
+  document.getElementById("seed").value = rs.seed ?? "";
+  document.getElementById("steps").value = (rs.options && rs.options.num_inference_steps) ?? 30;
+  const resSelect = document.getElementById("resolution");
+  const wh = `${rs.width}x${rs.height}`;
+  if ([...resSelect.options].some(o => o.value === wh)) resSelect.value = wh;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  document.getElementById("prompt").focus();
+  if (rs.had_media_inputs) {
+    alert("这条记录当时用了图片/参考文件（FL2VA 或 Ref2VA），历史记录不保存这些文件，需要重新上传。");
+  }
+}
+
+async function deleteEntry(id) {
+  if (!confirm("确定删除这条记录吗？生成的视频文件也会一并删除，不可恢复。")) return;
+  try {
+    const resp = await fetch(`${API}/v1/videos/${id}`, { method: "DELETE" });
+    if (resp.ok || resp.status === 404) {
+      refreshHistory();
+    } else {
+      alert(`删除失败: HTTP ${resp.status}`);
+    }
+  } catch (e) {
+    alert(`删除失败: ${e}`);
+  }
+}
+
+// prompt 点击复制 / 复用 / 删除 都委托到容器上，避免逐卡片单独绑定。
 document.getElementById("history").addEventListener("click", async (e) => {
+  const reuseBtn = e.target.closest("[data-reuse]");
+  if (reuseBtn) { reuseEntry(reuseBtn.getAttribute("data-reuse")); return; }
+
+  const deleteBtn = e.target.closest("[data-delete]");
+  if (deleteBtn) { deleteEntry(deleteBtn.getAttribute("data-delete")); return; }
+
   const el = e.target.closest(".hc-prompt");
   if (!el) return;
   const text = el.textContent;

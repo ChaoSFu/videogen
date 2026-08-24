@@ -13,19 +13,25 @@ guessed from prose docs):
   POST /api/fl2va    -> multipart/form-data (same Form fields as t2va, plus
                         optional `image`/`last_image` file uploads; at
                         least one of the two is required)
-  Both raise 400 (bad request) / 409 (generation_lock busy) / 500
+  POST /api/ref2va   -> multipart/form-data (same shared Form fields, plus
+                        `references`: repeated file field, 1-12 items,
+                        each auto-classified image/video/audio by H3 itself
+                        from content-type/extension — see its
+                        `_detect_reference_kind`. We don't replicate that
+                        classification; we just forward whatever
+                        content_type/filename we were given.)
+  All three raise 400 (bad request) / 409 (generation_lock busy) / 500
   (generation failed) via HTTPException, JSON body {"detail": "..."} in
-  all three cases, and share the same response shape (both call
-  app.py's `_run_generation` -> `core/runner.py`'s `generate()`).
+  all three cases, and share the same response shape (all three call
+  into `core/runner.py`'s generate()/generate_ref2va()).
 
-t2va (P0) and fl2va (P1) are wired up to real generation. ref2va (P2) is
-listed in capabilities() as "planned" and rejected with
-InvalidRequestError until implemented.
+t2va (P0), fl2va (P1) and ref2va (P2) are all wired up to real generation.
 """
 
 from __future__ import annotations
 
 import base64
+import mimetypes
 from typing import Any
 
 import httpx
@@ -40,6 +46,14 @@ from videogen.backends.base import (
 )
 from videogen.schemas import GenerateRequest, GenerateResponse, VideoOutput
 
+# H3's own documented ceiling: <=9 images, <=3 videos, <=3 audio, 12 total.
+# We don't classify kind ourselves (that's H3's job), so we only enforce
+# the total here — a cheap, fast-fail check before spending a multipart
+# upload and an H3 request on something it would reject anyway.
+MAX_REFERENCES = 12
+
+FilePart = tuple[str, bytes, str]
+
 
 def _form_value(value: Any) -> Any:
     """httpx form-encodes bools as True/False; H3's FastAPI Form(bool) parser
@@ -49,8 +63,8 @@ def _form_value(value: Any) -> Any:
     return value
 
 
-def _decode_image(label: str, data_url_or_b64: str) -> bytes:
-    """Accepts either a raw base64 string or a `data:image/...;base64,...`
+def _decode_base64_payload(label: str, data_url_or_b64: str) -> bytes:
+    """Accepts either a raw base64 string or a `data:<mime>;base64,...`
     data URL (what browsers' FileReader.readAsDataURL produces — the
     frontend sends these as-is rather than stripping the prefix client-side)."""
     payload = data_url_or_b64
@@ -60,6 +74,20 @@ def _decode_image(label: str, data_url_or_b64: str) -> bytes:
         return base64.b64decode(payload, validate=True)
     except Exception as exc:
         raise InvalidRequestError(f"{label} is not valid base64: {exc}") from exc
+
+
+def _guess_content_type(data_url_or_b64: str, filename: str) -> str:
+    """Best-effort MIME type for a reference upload: prefer the data: URL's
+    own declared type, then fall back to guessing from the filename
+    extension. If neither works, H3's own `_detect_reference_kind` will
+    reject it with a clear 400 — we don't need to be exhaustive here."""
+    if data_url_or_b64.startswith("data:"):
+        header = data_url_or_b64.split(",", 1)[0]  # "data:image/png;base64"
+        mime = header[len("data:") :].split(";")[0]
+        if mime:
+            return mime
+    guessed, _ = mimetypes.guess_type(filename)
+    return guessed or "application/octet-stream"
 
 
 class MiniMaxH3Backend(VideoBackend):
@@ -92,7 +120,7 @@ class MiniMaxH3Backend(VideoBackend):
                     "description": "first/last frame + text -> video",
                 },
                 "ref2va": {
-                    "status": "planned",
+                    "status": "available",
                     "description": "reference image/video/audio + text -> video",
                 },
             },
@@ -118,9 +146,10 @@ class MiniMaxH3Backend(VideoBackend):
             return await self._generate_t2va(request)
         if request.mode == "fl2va":
             return await self._generate_fl2va(request)
+        if request.mode == "ref2va":
+            return await self._generate_ref2va(request)
         raise InvalidRequestError(
-            f"mode={request.mode!r} is not implemented yet for backend {self.name!r} "
-            "(t2va/fl2va are supported in this phase; ref2va is planned)",
+            f"mode={request.mode!r} is not supported by backend {self.name!r}",
             backend=self.name,
         )
 
@@ -141,20 +170,56 @@ class MiniMaxH3Backend(VideoBackend):
             )
 
         form = self._build_shared_form(request)
-        files: dict[str, tuple[str, bytes, str]] = {}
+        files: list[tuple[str, FilePart]] = []
         if first_frame:
-            files["image"] = ("first_frame.png", _decode_image("first_frame", first_frame), "image/png")
+            files.append(
+                ("image", ("first_frame.png", _decode_base64_payload("first_frame", first_frame), "image/png"))
+            )
         if last_frame:
-            files["last_image"] = ("last_frame.png", _decode_image("last_frame", last_frame), "image/png")
+            files.append(
+                ("last_image", ("last_frame.png", _decode_base64_payload("last_frame", last_frame), "image/png"))
+            )
 
         data = await self._call_h3("/api/fl2va", data=form, files=files)
+        return self._normalize_result(request, data)
+
+    async def _generate_ref2va(self, request: GenerateRequest) -> GenerateResponse:
+        options = request.options or {}
+        references = options.get("references") or []
+        if not references:
+            raise InvalidRequestError(
+                "ref2va requires options.references: a non-empty list of "
+                '{"data": "<base64 or data: URL>", "filename": "...", "content_type": "..."} '
+                "(filename/content_type are optional but help H3 classify image vs video vs audio)",
+                backend=self.name,
+            )
+        if len(references) > MAX_REFERENCES:
+            raise InvalidRequestError(
+                f"ref2va accepts at most {MAX_REFERENCES} references total "
+                f"(<=9 images, <=3 videos, <=3 audio per H3's own limits); got {len(references)}",
+                backend=self.name,
+            )
+
+        form = self._build_shared_form(request)
+        files: list[tuple[str, FilePart]] = []
+        for i, ref in enumerate(references):
+            if not isinstance(ref, dict) or "data" not in ref:
+                raise InvalidRequestError(
+                    f'references[{i}] must be an object with a "data" field (base64)', backend=self.name
+                )
+            raw = _decode_base64_payload(f"references[{i}].data", ref["data"])
+            filename = ref.get("filename") or f"reference_{i}"
+            content_type = ref.get("content_type") or _guess_content_type(ref["data"], filename)
+            files.append(("references", (filename, raw, content_type)))
+
+        data = await self._call_h3("/api/ref2va", data=form, files=files)
         return self._normalize_result(request, data)
 
     async def _call_h3(
         self,
         path: str,
         data: dict[str, Any],
-        files: dict[str, tuple[str, bytes, str]] | None = None,
+        files: list[tuple[str, FilePart]] | None = None,
     ) -> dict[str, Any]:
         try:
             async with httpx.AsyncClient(
@@ -185,8 +250,8 @@ class MiniMaxH3Backend(VideoBackend):
         return resp.json()
 
     def _build_shared_form(self, request: GenerateRequest) -> dict[str, Any]:
-        """Form fields common to /api/t2va and /api/fl2va (both take the
-        same Form(...) signature modulo the fl2va-only file uploads)."""
+        """Form fields common to /api/t2va, /api/fl2va and /api/ref2va (all
+        three take the same Form(...) signature modulo file uploads)."""
         options = request.options or {}
         form: dict[str, Any] = {
             "prompt": request.prompt,

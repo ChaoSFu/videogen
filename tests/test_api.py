@@ -268,6 +268,77 @@ def test_history_respects_limit(tmp_path):
     assert entries[0]["prompt"] == "prompt 4"
 
 
+# --- history delete (also deletes the underlying video file) -------------
+
+
+def test_delete_history_entry_returns_204(tmp_path):
+    client = make_client(FakeBackend(generate_result=sample_success_response()), tmp_path)
+    client.post("/v1/videos/generate", json=sample_request_body())
+    entry_id = client.get("/v1/videos").json()[0]["id"]
+
+    resp = client.delete(f"/v1/videos/{entry_id}")
+    assert resp.status_code == 204
+    assert client.get("/v1/videos").json() == []
+
+
+def test_delete_unknown_history_entry_returns_404(tmp_path):
+    client = make_client(FakeBackend(), tmp_path)
+    resp = client.delete("/v1/videos/not-a-real-id")
+    assert resp.status_code == 404
+
+
+def test_delete_history_entry_also_deletes_video_file(tmp_path):
+    video_file = tmp_path / "generated.mp4"
+    video_file.write_bytes(b"fake mp4 bytes")
+    response = GenerateResponse(
+        backend="minimax-h3",
+        mode="t2va",
+        status="succeeded",
+        output=VideoOutput(video_path=str(video_file), video_url="http://x/x.mp4", duration=5.0, width=768, height=768),
+        metadata={"seed": 1},
+    )
+    client = make_client(FakeBackend(generate_result=response), tmp_path)
+    client.post("/v1/videos/generate", json=sample_request_body())
+    entry_id = client.get("/v1/videos").json()[0]["id"]
+
+    assert video_file.exists()
+    resp = client.delete(f"/v1/videos/{entry_id}")
+    assert resp.status_code == 204
+    assert not video_file.exists()
+
+
+def test_delete_history_entry_with_already_missing_video_file_still_succeeds(tmp_path):
+    # e.g. deleted by hand, or the disk cleaned up separately — the history
+    # record should still be removable without turning into a 500.
+    missing_path = tmp_path / "already-gone.mp4"
+    response = GenerateResponse(
+        backend="minimax-h3",
+        mode="t2va",
+        status="succeeded",
+        output=VideoOutput(video_path=str(missing_path), video_url="http://x/x.mp4", duration=5.0, width=768, height=768),
+        metadata={"seed": 1},
+    )
+    client = make_client(FakeBackend(generate_result=response), tmp_path)
+    client.post("/v1/videos/generate", json=sample_request_body())
+    entry_id = client.get("/v1/videos").json()[0]["id"]
+
+    resp = client.delete(f"/v1/videos/{entry_id}")
+    assert resp.status_code == 204
+
+
+# --- request_summary round-trips through the API --------------------------
+
+
+def test_history_entry_exposes_request_summary_for_reuse(tmp_path):
+    client = make_client(FakeBackend(generate_result=sample_success_response()), tmp_path)
+    client.post("/v1/videos/generate", json=sample_request_body(seed=999))
+
+    entry = client.get("/v1/videos").json()[0]
+    assert entry["request_summary"]["prompt"] == sample_request_body()["prompt"]
+    assert entry["request_summary"]["seed"] == 999
+    assert entry["request_summary"]["had_media_inputs"] is False
+
+
 # --- queueing (needs real async concurrency, not the sync TestClient) ----
 
 

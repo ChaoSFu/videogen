@@ -317,6 +317,7 @@ H3 runtime 生成是全局串行的（同一时间只处理一个请求），但
 | `setup_h3.sh` 在建目录时报 `Permission denied`（如 `/data`） | 默认路径 `/data/...` 是给特定服务器约定的，不是所有机器都有；用 `HF_HOME=$HOME/hf-cache H3_OUTPUT_DIR=$HOME/videogen-output/minimax-h3 TMPDIR=$HOME/tmp bash scripts/setup_h3.sh` 改到你有权限的目录，`server-h3.sh` 同理，可以建一个不提交 git 的 `scripts/h3.env` 持久化这些覆盖 |
 | `download_h3.sh` 中途失败 | 直接重跑，`snapshot_download` 会跳过已下载完整的文件，不会重新下载 |
 | Ref2VA 请求"卡住不动"，`nvidia-smi` 显存却几乎不涨 | 大概率没提前跑 `download_ref2va.sh`，H3 在现场下载 `transformer_ref` 组件（约 67GB，13+分钟起）。用 `curl http://127.0.0.1:18611/api/progress` 确认，`phase` 是 `loading_transformer` 且 `message` 提到 `transformer_ref` 就是这个情况——等它下完就会正常继续；以后跑一次 `download_ref2va.sh` 避免每次都发生 |
+| Ref2VA 返回 502，detail 是 `Resampling ... needs torchaudio` | 参考音频/带音轨视频的采样率跟音频 VAE 原生的 32000Hz 不一致（常见，大多数素材是 44100/48000Hz），重采样需要 `torchaudio`，但 `setup_h3.sh` 早期版本的依赖清单漏了它（上游 README 的 pip 代码块也没写，跟 torchvision 一样是隐藏依赖）。`git pull` 拿到修复后的脚本，或者直接手动补装：`conda run --no-capture-output -n videogen-h3 python -m pip install torchaudio --index-url https://download.pytorch.org/whl/cu128`（必须用这个 cu128 索引，不能走 `PIP_INDEX_URL` 普通镜像，否则版本对不上会长时间 backtrack） |
 
 ## 更新子模块到上游最新
 

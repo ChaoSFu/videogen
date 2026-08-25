@@ -124,6 +124,15 @@ run_pip install "av==16.0.1" "fastapi==0.104.1" "uvicorn==0.24.0" python-multipa
 run_pip install torchvision --index-url https://download.pytorch.org/whl/cu128 \
     || fail "torchvision 安装失败（processor 组件依赖它，t2va 无法正常工作）"
 
+echo "📦 [4b/6] torchaudio ..."
+# 同样未出现在上游 README 的 pip 代码块里，同样是隐藏依赖：Ref2VA 的参考
+# 音频/带音轨视频，只要采样率跟音频 VAE 原生的 32000Hz 不一致（常见——
+# 大多数素材是 44100/48000Hz）就需要用 torchaudio 重采样，缺了会在真正
+# 推理时报 "needs torchaudio" 而不是装环境时报错，实测验证过。同样必须
+# 跟 torch 用 cu128 索引装。
+run_pip install torchaudio --index-url https://download.pytorch.org/whl/cu128 \
+    || fail "torchaudio 安装失败（Ref2VA 用非 32000Hz 的音频参考时需要它）"
+
 echo "📦 [5/6] bitsandbytes（默认 TE 量化 bnb-4bit 依赖，必需）..."
 run_pip install "bitsandbytes==0.49.0" || fail "bitsandbytes 安装失败"
 
